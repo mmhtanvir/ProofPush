@@ -814,9 +814,13 @@ def _audit_update(
                 all_routes = sorted(list(set(base_routes) | set(prop_routes)))
 
                 if cfg.audit_level == "quick" and not cfg.routes.crawl and len(all_routes) > 5:
-                    # Prioritize root, task-related routes, and modified routes
-                    quick_routes = [r for r in all_routes if r == "/" or any(w in r.lower() for w in task_context.title.lower().split())]
-                    all_routes = (quick_routes + all_routes)[:5]
+                    # Routes you listed are always checked; quick audits cap only the discovered extras (root and
+                    # task-related first), never duplicating a route
+                    listed = [r for r in cfg.routes.base_routes if r in all_routes]
+                    discovered = [r for r in all_routes if r not in listed]
+                    priority = [r for r in discovered if r == "/" or any(w in r.lower() for w in task_context.title.lower().split())]
+                    extras = list(dict.fromkeys(priority + discovered))[: max(0, 5 - len(listed))]
+                    all_routes = list(dict.fromkeys(listed + extras))
 
                 # 7. Browser comparison execution
                 base_url_b = base_env.frontend.base_url
@@ -919,6 +923,12 @@ def _audit_update(
                                     findings.append(api_finding)
                             # Responsive layout + load speed: sideways scroll, off-screen/overlapping controls, slower loads
                             layout_finding = classifier.classify_layout(at(r, vp), before.layout, after.layout)
+                            if layout_finding:
+                                # Confirm with a fresh measurement of both versions: animated or rotating content
+                                # (carousels, typing effects) differs between loads without anything being broken
+                                again_b = await visit(base_url_b, r, vp, screenshot=False)
+                                again_p = await visit(base_url_p, r, vp, screenshot=False)
+                                layout_finding = classifier.classify_layout(at(r, vp), again_b.layout, again_p.layout) and layout_finding
                             if layout_finding:
                                 findings.append(layout_finding)
                             # Buttons at this screen size (a mobile-only menu button can break on its own)
