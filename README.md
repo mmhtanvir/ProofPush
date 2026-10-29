@@ -107,6 +107,38 @@ flowchart LR
 
 ---
 
+## 🔐 Test Accounts: Check the Whole Site, Locally and in Prod
+
+Give ProofPush a test account per environment and it logs in, crawls every page reachable by links, and checks each one, including pages behind the login.
+
+```yaml
+routes:
+  base_routes: ["/dashboard"]   # start here; the first one should need login
+  crawl: true                   # follow links to every reachable page
+  max_pages: 50
+auth:
+  login_path: /login
+  accounts:                     # names of env vars, never the passwords themselves
+    local: {username_env: SHOP_USER,      password_env: SHOP_PASSWORD}
+    prod:  {username_env: SHOP_PROD_USER, password_env: SHOP_PROD_PASSWORD, otp_secret_env: SHOP_PROD_OTP}
+environments:
+  prod: https://shop.example.com
+```
+
+Put the values in your shell environment or in `.proofpush/secrets.env` (`SHOP_USER=...`, one per line). ProofPush adds `.proofpush/` to `.git/info/exclude`, so it can't be committed.
+
+- **Local (every push):** both versions are logged in with the `local` account and compared page by page. A push that breaks login is a regression.
+- **Prod:** `proofpush check --env prod` logs in with the `prod` account and checks the live site. It is read-only: it follows links with GET, never submits forms, skips logout/delete/cancel links, and runs only workflows marked `prod: true`. Exits 1 on any broken page, so you can run it after a deploy or on a schedule.
+- **Login form:** by default the first email/username and password fields are filled and submitted. For anything else, list `auth.steps` (same actions as workflows) using `{username}`, `{password}` and `{otp}`.
+
+**One-time codes (2FA).** ProofPush never bypasses them:
+- **Authenticator app (TOTP):** when enabling 2FA for the test account, save its setup secret (the text behind the QR code) as `otp_secret_env`. ProofPush generates the current code itself, fully automatic.
+- **SMS / email codes, SSO, captchas:** run `proofpush login --env prod` once. A browser opens, you log in and type the code, and the session is saved to `.proofpush/session-prod.json` (kept out of git). Checks reuse it until it expires, then tell you to log in again.
+
+Use a dedicated low-privilege test account in prod, never an admin.
+
+---
+
 ## 🚨 Suspicious Push Rules
 
 Every push is also checked against **103 rules** for supply-chain and tampering patterns, ported from [Pushguard](https://github.com/saadiqayyum/pushguard)'s catalog (MIT, see `proofpush/PUSHGUARD_LICENSE`). They run locally from git alone, so they work in any repo, including unconfigured ones under `install --global`.
@@ -273,11 +305,13 @@ application:
 | `proofpush review` | Manually runs an audit on your pending commits |
 | `proofpush review --full` | Runs a comprehensive audit (multi-viewport, full crawl) |
 | `proofpush review --mode strict` | Forces strict blocking mode |
+| `proofpush check --env prod` | Logs in with the prod test account and checks every reachable page of the live site (read-only) |
+| `proofpush login --env prod` | Log in by hand once (SMS/email codes, SSO) and save the session for checks |
 | `proofpush review --history-only` | Git-only checks (reverted past fixes, secrets), no app or browser |
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 40-scenario test suite |
+| `proofpush test` | Runs the built-in 43-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -293,11 +327,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 40 real-world developer scenarios:
+ProofPush is tested against 43 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 40 tests in 12s (OK)
+# Ran 43 tests in 12s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

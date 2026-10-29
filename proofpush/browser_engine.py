@@ -6,11 +6,27 @@ network failure monitoring, and safe interactive element inspection.
 
 from __future__ import annotations
 
+import asyncio
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from playwright.async_api import async_playwright, Response, Request
 
-from proofpush.config import WorkflowConfig
+from proofpush.config import AuthConfig, Credentials, WorkflowConfig, WorkflowStep
+from proofpush.utils import redact_secrets, totp
+
+# Links a crawler must never follow: they end the session or change data even as a GET
+UNSAFE_LINK = re.compile(r"log-?out|sign-?out|logoff|delete|remove|destroy|unsubscribe|deactivate|purge|cancel", re.I)
+NON_PAGE = re.compile(r"\.(pdf|zip|png|jpe?g|gif|svg|webp|mp4|mov|csv|xlsx?|docx?|ics|json|xml|txt)$", re.I)
+OTP_SELECTOR = ", ".join([
+    "input[autocomplete=one-time-code]:visible", "input[name*=otp i]:visible", "input[id*=otp i]:visible",
+    "input[name*=code i]:not([type=password]):visible", "input[name*=token i]:not([type=hidden]):visible",
+])
+LOGIN_USER_SELECTOR = ", ".join([
+    "input[type=email]", "input[autocomplete=username]", "input[name*=email i]", "input[name*=user i]",
+    "input[id*=email i]", "input[id*=user i]", "input[type=text]",
+]) + " >> nth=0"
 
 DESTRUCTIVE_KEYWORDS = [
     "delete", "remove", "destroy", "drop", "purge", "truncate", "terminate",
@@ -60,6 +76,8 @@ class BrowserEngine:
     def __init__(self, headless: bool = True, timeout: int = 15000):
         self.headless = headless
         self.timeout = timeout
+        # Logged-in browser state (cookies, localStorage) per base URL, from login()
+        self.sessions: Dict[str, Dict[str, Any]] = {}
 
     async def visit_page(
         self,
@@ -83,6 +101,7 @@ class BrowserEngine:
                 viewport=vp,
                 ignore_https_errors=True,
                 user_agent="proofpush-functional-agent",
+                storage_state=self.sessions.get(base_url),
             )
             page = await context.new_page()
 
@@ -214,6 +233,145 @@ class BrowserEngine:
                     passed=False,
                 )
 
+    async def _run_step(self, page, base_url: str, step: WorkflowStep, step_res: Optional[Dict[str, Any]] = None) -> None:
+        """Run one workflow step; raises on failure."""
+        step_res = step_res if step_res is not None else {}
+        if step.action == "navigate":
+            nav_url = step.value if step.value.startswith("http") else f"{base_url.rstrip('/')}{step.value}"
+            await page.goto(nav_url, timeout=self.timeout)
+
+        elif step.action == "click":
+            # Safety check: avoid destructive operations unless explicitly confirmed
+            if step.selector and any(k in step.selector.lower() for k in DESTRUCTIVE_KEYWORDS):
+                step_res["warning"] = "Skipped potentially destructive click action"
+            else:
+                await page.click(step.selector, timeout=self.timeout)
+
+        elif step.action == "fill":
+            await page.fill(step.selector, step.value or "", timeout=self.timeout)
+
+        elif step.action == "select":
+            await page.select_option(step.selector, step.value or "", timeout=self.timeout)
+
+        elif step.action == "wait_for":
+            await page.wait_for_selector(step.selector, timeout=self.timeout)
+
+        elif step.action == "assert_text":
+            if step.selector:
+                text = await page.inner_text(step.selector, timeout=self.timeout)
+            else:
+                text = await page.inner_text("body", timeout=self.timeout)
+            if step.expected and step.expected not in text:
+                raise AssertionError(f"Expected text '{step.expected}' not found in '{text[:100]}'")
+
+        elif step.action == "assert_url":
+            current_url = page.url
+            if step.expected and step.expected not in current_url:
+                raise AssertionError(f"Expected URL to contain '{step.expected}', but got '{current_url}'")
+
+    async def login(self, base_url: str, auth: AuthConfig, creds: Optional[Credentials],
+                    saved_session: Optional[Path] = None, probe_route: str = "/") -> Optional[str]:
+        """Log the test account in (or reuse a saved session) and keep it for later visits. Returns an error, or None."""
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=self.headless)
+            try:
+                login_url = f"{base_url.rstrip('/')}{auth.login_path}"
+                # 1. A session saved by `proofpush login` (needed for SMS/email codes, SSO, captchas)
+                if saved_session and saved_session.is_file():
+                    context = await browser.new_context(ignore_https_errors=True, user_agent="proofpush-functional-agent",
+                                                        storage_state=str(saved_session))
+                    page = await context.new_page()
+                    # Still valid if a page behind the login doesn't bounce us to a login form
+                    await page.goto(f"{base_url.rstrip('/')}{probe_route}", timeout=self.timeout, wait_until="domcontentloaded")
+                    await self._settle(page)
+                    if not await self._on_login_form(page):
+                        self.sessions[base_url] = await context.storage_state()
+                        return None
+                    if not creds:
+                        return f"Saved session {saved_session.name} has expired; run `proofpush login` again"
+                if not creds:
+                    return "No test account credentials or saved session"
+
+                # 2. Automated login with the test account
+                context = await browser.new_context(ignore_https_errors=True, user_agent="proofpush-functional-agent")
+                page = await context.new_page()
+                await page.goto(login_url, timeout=self.timeout, wait_until="domcontentloaded")
+                values = {"{username}": creds.username, "{password}": creds.password}
+                if auth.steps:
+                    for step in auth.steps:
+                        value = step.value or ""
+                        if "{otp}" in value:
+                            if not creds.otp_secret:
+                                return "auth.steps uses {otp} but the account has no otp_secret_env"
+                            value = value.replace("{otp}", totp(creds.otp_secret))
+                        for k, v in values.items():
+                            value = value.replace(k, v)
+                        await self._run_step(page, base_url, WorkflowStep(
+                            action=step.action, selector=step.selector, optional=step.optional,
+                            expected=step.expected, value=value or None))
+                else:
+                    # Common login forms: first email/username field, first password field, submit
+                    await page.fill(LOGIN_USER_SELECTOR, creds.username, timeout=self.timeout)
+                    await page.fill("input[type=password]", creds.password, timeout=self.timeout)
+                    await page.press("input[type=password]", "Enter")
+                    await self._settle(page)
+                    # Second step: a one-time code field
+                    if await page.locator(OTP_SELECTOR).count() > 0:
+                        if not creds.otp_secret:
+                            return ("Login asks for a one-time code. Set otp_secret_env for an authenticator-app account, "
+                                    "or run `proofpush login` once and type the code yourself")
+                        await page.fill(OTP_SELECTOR + " >> nth=0", totp(creds.otp_secret), timeout=self.timeout)
+                        await page.press(OTP_SELECTOR + " >> nth=0", "Enter")
+                await self._settle(page)
+                if await self._on_login_form(page):
+                    return f"Still on a login form after signing in ({page.url}); check the test account or auth.steps"
+                self.sessions[base_url] = await context.storage_state()
+                return None
+            except Exception as exc:
+                # Never echo credentials: Playwright errors can include filled values
+                msg = str(exc)
+                if creds:
+                    msg = msg.replace(creds.password, "***")
+                return redact_secrets(msg).splitlines()[0]
+            finally:
+                await browser.close()
+
+    async def _settle(self, page) -> None:
+        try:
+            await page.wait_for_load_state("networkidle", timeout=self.timeout)
+        except Exception:
+            pass
+
+    async def _on_login_form(self, page) -> bool:
+        return await page.locator(f"input[type=password]:visible, {OTP_SELECTOR}").count() > 0
+
+    async def save_session_interactively(self, url: str, out: Path, wait_for_user) -> None:
+        """Open a visible browser at the login page, let the person log in (OTP, SSO...), then save the session."""
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=False)
+            context = await browser.new_context(ignore_https_errors=True)
+            page = await context.new_page()
+            await page.goto(url, timeout=self.timeout)
+            await asyncio.get_running_loop().run_in_executor(None, wait_for_user)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            await context.storage_state(path=str(out))
+            out.chmod(0o600)
+            await browser.close()
+
+    async def crawl(self, base_url: str, start_routes: List[str], max_pages: int, excluded=lambda route: False) -> List[PageVisitResult]:
+        """Visit every page reachable by same-site links (as the logged-in account, if any), up to max_pages. GET only."""
+        # Limit: one browser launch per page; reuse a single browser if crawls get slow
+        queue, visits, seen = list(dict.fromkeys(start_routes or ["/"])), [], set()
+        while queue and len(visits) < max_pages:
+            route = queue.pop(0)
+            if route in seen or excluded(route) or UNSAFE_LINK.search(route) or NON_PAGE.search(route):
+                continue
+            seen.add(route)
+            visit = await self.visit_page(base_url, route, capture_screenshot=False, discover_elements=False)
+            visits.append(visit)
+            queue += [link for link in visit.discovered_links if link not in seen]
+        return visits
+
     async def execute_workflow(
         self,
         base_url: str,
@@ -233,6 +391,7 @@ class BrowserEngine:
                 viewport=vp,
                 ignore_https_errors=True,
                 user_agent="proofpush-workflow-runner",
+                storage_state=self.sessions.get(base_url),
             )
             page = await context.new_page()
 
@@ -271,39 +430,7 @@ class BrowserEngine:
             for idx, step in enumerate(workflow.steps):
                 step_res = {"step_index": idx, "action": step.action, "passed": False}
                 try:
-                    if step.action == "navigate":
-                        nav_url = step.value if step.value.startswith("http") else f"{base_url.rstrip('/')}{step.value}"
-                        await page.goto(nav_url, timeout=self.timeout)
-
-                    elif step.action == "click":
-                        # Safety check: avoid destructive operations unless explicitly confirmed
-                        if step.selector and any(k in step.selector.lower() for k in DESTRUCTIVE_KEYWORDS):
-                            step_res["warning"] = "Skipped potentially destructive click action"
-                        else:
-                            await page.click(step.selector, timeout=self.timeout)
-
-                    elif step.action == "fill":
-                        await page.fill(step.selector, step.value or "", timeout=self.timeout)
-
-                    elif step.action == "select":
-                        await page.select_option(step.selector, step.value or "", timeout=self.timeout)
-
-                    elif step.action == "wait_for":
-                        await page.wait_for_selector(step.selector, timeout=self.timeout)
-
-                    elif step.action == "assert_text":
-                        if step.selector:
-                            text = await page.inner_text(step.selector, timeout=self.timeout)
-                        else:
-                            text = await page.inner_text("body", timeout=self.timeout)
-                        if step.expected and step.expected not in text:
-                            raise AssertionError(f"Expected text '{step.expected}' not found in '{text[:100]}'")
-
-                    elif step.action == "assert_url":
-                        current_url = page.url
-                        if step.expected and step.expected not in current_url:
-                            raise AssertionError(f"Expected URL to contain '{step.expected}', but got '{current_url}'")
-
+                    await self._run_step(page, base_url, step, step_res)
                     step_res["passed"] = True
                     steps_completed += 1
                 except Exception as step_exc:

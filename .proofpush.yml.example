@@ -36,6 +36,8 @@ application:
 # Routes to test
 routes:
   auto_discover: true
+  crawl: false      # true: log in and follow links to every reachable page
+  max_pages: 50
   base_routes:
     - "/"
     - "/checkout"
@@ -106,3 +108,18 @@ ai:
 policies:
   fail_open: false
   interactive_fallback: block # block or allow in non-interactive / CI / AI CLI environments
+
+# Test accounts (values are env var NAMES; put the secrets in your environment or .proofpush/secrets.env)
+# auth:
+#   login_path: /login
+#   accounts:
+#     local: {username_env: SHOP_USER, password_env: SHOP_PASSWORD}
+#     prod:  {username_env: SHOP_PROD_USER, password_env: SHOP_PROD_PASSWORD, otp_secret_env: SHOP_PROD_OTP}
+
+# Live sites for `proofpush check --env <name>` (read-only)
+# environments:
+#   prod: https://shop.example.com
+
+# Suspicious-push rules
+# push_rules:
+#   disable: [py-obfuscated-payload]

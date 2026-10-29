@@ -19,7 +19,7 @@ from rich.console import Console
 from proofpush.classifier import Finding
 from proofpush.visual_comparator import VisualComparisonResult
 from proofpush.unrelated_analyzer import SecurityAuditResult
-from proofpush.utils import run_command
+from proofpush.utils import exclude_from_git
 
 
 @dataclass
@@ -51,22 +51,8 @@ class ReportGenerator:
         self.repo_path = repo_path.resolve()
         self.reports_dir = self.repo_path / ".proofpush" / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self._exclude_from_git()
+        exclude_from_git(self.repo_path)
         self.console = Console(soft_wrap=True)
-
-    def _exclude_from_git(self) -> None:
-        """Keep reports out of `git add -A` via the repo-local .git/info/exclude (never touches .gitignore)."""
-        code, out, _ = run_command(["git", "rev-parse", "--git-common-dir"], cwd=self.repo_path)
-        if code != 0:
-            return
-        exclude = (self.repo_path / out.strip()) / "info" / "exclude"
-        try:
-            existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-            if "/.proofpush/" not in existing.splitlines():
-                exclude.parent.mkdir(parents=True, exist_ok=True)
-                exclude.write_text(existing + ("" if existing.endswith("\n") or not existing else "\n") + "/.proofpush/\n", encoding="utf-8")
-        except OSError:
-            pass
 
     def print_terminal_report(self, data: AuditReportData) -> None:
         """Render terminal report matching specification."""
@@ -132,7 +118,7 @@ class ReportGenerator:
                 print(f"Details: {v.summary}")
 
         print("\n" + "=" * 60)
-        decision_str = f"RECOMMENDATION: PUSH {data.decision}"
+        decision_str = f"RESULT: CHECK {data.decision}" if data.enforcement_mode == "check" else f"RECOMMENDATION: PUSH {data.decision}"
         print(decision_str)
         if data.decision_reason:
             print(f"Reason: {data.decision_reason}")

@@ -18,7 +18,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from proofpush.config import load_config, AuditorConfig
+from proofpush.config import load_config, resolve_account, session_file, AuditorConfig
 from proofpush.git_interceptor import GitInterceptor, PushRefUpdate
 from proofpush.task_resolver import TaskResolver
 from proofpush.baseline_manager import BaselineManager, BaselineMetadata
@@ -34,7 +34,7 @@ from proofpush.ai_engine import get_ai_adapter
 from proofpush.reporter import ReportGenerator, AuditReportData
 from proofpush.policy_enforcer import PolicyEnforcer
 from proofpush.doctor import Doctor
-from proofpush.utils import detect_unattended
+from proofpush.utils import detect_unattended, exclude_from_git
 
 
 console = Console(soft_wrap=True)
@@ -201,6 +201,116 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     sys.exit(max(codes))
 
 
+def _blocked(target: str, problem: str) -> Finding:
+    return Finding(
+        category="BLOCKED", target=target, before_behavior="", after_behavior=problem,
+        expected_behavior="Check can run", actual_result=problem, confidence=1.0, recommended_action=problem,
+    )
+
+
+@main.command()
+@click.option("--env", "env_name", default="prod", help="Environment name from `environments:` in .proofpush.yml")
+def check(env_name: str):
+    """Check a live site (e.g. prod): log in with that environment's test account and visit every reachable page.
+
+    Read-only: follows links with GET, never submits forms, skips logout/delete links, and runs only
+    workflows marked `prod: true`. Exits 1 if anything is broken (usable after a deploy or on a schedule).
+    """
+    repo_path = Path.cwd().resolve()
+    cfg = load_config(repo_path)
+    base_url = cfg.environments.get(env_name)
+    if not base_url:
+        console.print(f"[red]No '{env_name}' environment in .proofpush.yml.[/red] Add:\n"
+                      f"  environments:\n    {env_name}: https://your-site.example", markup=False)
+        sys.exit(2)
+
+    engine = BrowserEngine(headless=True)
+    excluded = RouteDiscoverer(repo_path, cfg.routes.base_routes, cfg.routes.excluded_routes)._is_excluded
+    findings: List[Finding] = []
+    pages = 0
+
+    async def run():
+        nonlocal pages
+        if cfg.auth:
+            creds, problem = resolve_account(repo_path, cfg.auth, env_name)
+            saved = session_file(repo_path, env_name)
+            if not creds and not saved.is_file():
+                findings.append(_blocked(f"Test account ({env_name})", problem))
+                return
+            err = await engine.login(base_url, cfg.auth, creds, saved, (cfg.routes.base_routes or ["/"])[0])
+            if err:
+                findings.append(Finding(
+                    category="REGRESSION", target=f"Login ({env_name})", before_behavior="",
+                    after_behavior=err, expected_behavior="Test account can log in", actual_result=err,
+                    confidence=0.95, recommended_action="Check the live login page and the test account.", is_critical=True,
+                ))
+                return
+        for v in await engine.crawl(base_url, cfg.routes.base_routes, cfg.routes.max_pages, excluded):
+            pages += 1
+            broken = v.status >= 400 or v.error_message
+            noisy = v.console_errors or [n for n in v.network_failures if n.url.startswith(base_url)]
+            if not broken and not noisy:
+                findings.append(Finding(category="UNCHANGED", target=v.route, before_behavior="", after_behavior="OK",
+                                        expected_behavior="Page loads", actual_result="OK", confidence=1.0,
+                                        recommended_action="No action required."))
+                continue
+            detail = v.error_message or (f"HTTP {v.status}" if v.status >= 400 else "; ".join(
+                (v.console_errors + [f"{n.method} {n.url} {n.error_text}" for n in v.network_failures])[:3]))
+            findings.append(Finding(
+                category="REGRESSION" if broken else "POSSIBLE_REGRESSION", target=v.route,
+                before_behavior="", after_behavior=detail, expected_behavior="Page loads without errors",
+                actual_result=detail, confidence=0.9, recommended_action=f"Open {v.url} and fix the error.",
+                console_errors=v.console_errors, is_critical=bool(broken),
+            ))
+        for wf in cfg.workflows:
+            if wf.prod:
+                res = await engine.execute_workflow(base_url, wf)
+                findings.append(RegressionClassifier(TaskResolver(repo_path).resolve(explicit_task=f"Live check {env_name}"))
+                                .classify_workflow(res, res, guard=wf.guard))
+
+    try:
+        asyncio.run(run())
+    except Exception as exc:
+        findings.append(_blocked("Browser Engine", str(exc).splitlines()[0]))
+
+    failed = [f for f in findings if f.category != "UNCHANGED"]
+    report = AuditReportData(
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), repo_path=str(repo_path),
+        baseline_sha="live", proposed_sha=env_name, task_title=f"Live check: {env_name} ({base_url})",
+        task_source="check", enforcement_mode="check", decision="FAILED" if failed else "PASSED",
+        decision_reason=f"{len(failed)} problem(s) on {pages} page(s)" if failed else f"{pages} page(s) OK",
+        routes_checked=pages, workflows_checked=sum(1 for w in cfg.workflows if w.prod), visual_checks=0,
+        passed_count=len(findings) - len(failed), expected_count=0,
+        regressions_count=sum(1 for f in failed if f.category == "REGRESSION"),
+        not_tested_count=sum(1 for f in failed if f.category == "BLOCKED"), findings=findings,
+    )
+    reporter = ReportGenerator(repo_path)
+    reporter.print_terminal_report(report)
+    console.print(f"[dim]Evidence saved:[/dim] [cyan]{reporter.save_reports(report)['html']}[/cyan]")
+    sys.exit(1 if failed else 0)
+
+
+@main.command()
+@click.option("--env", "env_name", default="prod", help="Environment to save a session for")
+@click.option("--url", default=None, help="Site URL (defaults to environments.<env> in .proofpush.yml)")
+def login(env_name: str, url: Optional[str]):
+    """Log in by hand once (for SMS/email codes, SSO, captchas) and save the session for checks to reuse."""
+    repo_path = Path.cwd().resolve()
+    cfg = load_config(repo_path)
+    base = url or cfg.environments.get(env_name)
+    if not base:
+        console.print(f"[red]Pass --url or add environments.{env_name} to .proofpush.yml[/red]")
+        sys.exit(2)
+    out = session_file(repo_path, env_name)
+    login_path = cfg.auth.login_path if cfg.auth else "/login"
+    console.print(f"A browser window is opening at {base.rstrip('/')}{login_path}. Log in with the test account "
+                  "(including any one-time code), then come back here.", markup=False)
+    asyncio.run(BrowserEngine().save_session_interactively(
+        f"{base.rstrip('/')}{login_path}", out, lambda: input("Press Enter once you are logged in... ")))
+    exclude_from_git(repo_path)
+    console.print(f"[green]✔ Session saved to {out} (kept out of git). Checks reuse it until it expires.[/green]")
+
+
 def _audit_update(
     repo_path: Path,
     cfg: AuditorConfig,
@@ -306,7 +416,7 @@ def _audit_update(
                 prop_routes = route_discoverer.discover_source_routes(prop_env.worktree_path)
                 all_routes = sorted(list(set(base_routes) | set(prop_routes)))
 
-                if cfg.audit_level == "quick" and len(all_routes) > 5:
+                if cfg.audit_level == "quick" and not cfg.routes.crawl and len(all_routes) > 5:
                     # Prioritize root, task-related routes, and modified routes
                     quick_routes = [r for r in all_routes if r == "/" or any(w in r.lower() for w in task_context.title.lower().split())]
                     all_routes = (quick_routes + all_routes)[:5]
@@ -324,8 +434,32 @@ def _audit_update(
 
                 async def run_browser_audit():
                     nonlocal routes_checked_count, workflows_checked_count
+                    routes = all_routes
+                    # Log the local test account into both versions so pages behind login get checked too
+                    if cfg.auth:
+                        creds, problem = resolve_account(repo_path, cfg.auth, "local")
+                        saved = session_file(repo_path, "local")
+                        probe = (cfg.routes.base_routes or ["/"])[0]
+                        if not creds and not saved.is_file():
+                            findings.append(_blocked("Test account (local)", problem))
+                        else:
+                            base_err = await browser_engine.login(base_url_b, cfg.auth, creds, saved, probe)
+                            prop_err = await browser_engine.login(base_url_p, cfg.auth, creds, saved, probe)
+                            if prop_err and not base_err:
+                                findings.append(Finding(
+                                    category="REGRESSION", target="Login (test account)",
+                                    before_behavior="Test account logs in on the baseline", after_behavior=prop_err,
+                                    expected_behavior="Login keeps working", actual_result=prop_err, confidence=0.95,
+                                    recommended_action="Fix login before pushing.", is_critical=True,
+                                ))
+                            elif prop_err:
+                                findings.append(_blocked("Login (test account)", prop_err))
+                    if cfg.routes.crawl:
+                        crawled = await browser_engine.crawl(base_url_p, all_routes, cfg.routes.max_pages, route_discoverer._is_excluded)
+                        crawled += await browser_engine.crawl(base_url_b, all_routes, cfg.routes.max_pages, route_discoverer._is_excluded)
+                        routes = list(dict.fromkeys(v.route for v in crawled))[: cfg.routes.max_pages]
                     # Audit routes
-                    for r in all_routes:
+                    for r in routes:
                         routes_checked_count += 1
                         base_visit = await browser_engine.visit_page(base_url_b, r, capture_screenshot=cfg.visual.enabled)
                         prop_visit = await browser_engine.visit_page(base_url_p, r, capture_screenshot=cfg.visual.enabled)

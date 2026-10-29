@@ -5,10 +5,13 @@ Loads .proofpush.yml / .proofpush.yaml or falls back to sane defaults.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import yaml
+
+from proofpush.utils import exclude_from_git
 
 
 @dataclass
@@ -46,6 +49,7 @@ class WorkflowConfig:
     path: str = "/"
     steps: List[WorkflowStep] = field(default_factory=list)
     guard: bool = False  # reproduces a previously fixed bug: any failure blocks, whatever the baseline did
+    prod: bool = False  # safe to run against a live environment (`proofpush check`); off by default
 
 
 @dataclass
@@ -79,6 +83,31 @@ class RoutesConfig:
     auto_discover: bool = True
     base_routes: List[str] = field(default_factory=lambda: ["/"])
     excluded_routes: List[str] = field(default_factory=list)
+    crawl: bool = False  # follow links to check every reachable page, not just base/source routes
+    max_pages: int = 50
+
+
+@dataclass
+class AccountConfig:
+    # Names of environment variables (or keys in .proofpush/secrets.env) holding the credentials, never the values
+    username_env: str = ""
+    password_env: str = ""
+    otp_secret_env: str = ""  # authenticator-app (TOTP) secret, for logins that ask for a one-time code
+
+
+@dataclass
+class Credentials:
+    username: str
+    password: str
+    otp_secret: Optional[str] = None
+
+
+@dataclass
+class AuthConfig:
+    login_path: str = "/login"
+    # Optional; {username} and {password} are substituted. Without steps, the first email/username and password fields are filled
+    steps: List[WorkflowStep] = field(default_factory=list)
+    accounts: Dict[str, AccountConfig] = field(default_factory=dict)  # per environment: local, prod, ...
 
 
 @dataclass
@@ -122,7 +151,51 @@ class AuditorConfig:
     ai: AIConfig = field(default_factory=AIConfig)
     policies: PoliciesConfig = field(default_factory=PoliciesConfig)
     push_rules: PushRulesConfig = field(default_factory=PushRulesConfig)
+    auth: Optional[AuthConfig] = None
+    environments: Dict[str, str] = field(default_factory=dict)  # name -> live base URL, e.g. prod
     report_retention: int = 30
+
+
+def _parse_steps(raw_steps) -> List[WorkflowStep]:
+    return [
+        WorkflowStep(
+            action=s["action"],
+            selector=s.get("selector"),
+            value=s.get("value"),
+            expected=s.get("expected"),
+            optional=s.get("optional", False),
+        )
+        for s in raw_steps or [] if isinstance(s, dict) and "action" in s
+    ]
+
+
+def session_file(repo_path: Path, env_name: str) -> Path:
+    """Browser session saved by `proofpush login` (for SMS/email codes, SSO, captchas)."""
+    return repo_path / ".proofpush" / f"session-{env_name}.json"
+
+
+def resolve_account(repo_path: Path, auth: AuthConfig, env_name: str) -> Tuple[Optional[Credentials], str]:
+    """(credentials, "") for the environment's test account, or (None, what to set)."""
+    acc = auth.accounts.get(env_name)
+    if not acc or not acc.username_env or not acc.password_env:
+        return None, f"auth.accounts.{env_name} needs username_env and password_env in .proofpush.yml"
+    secrets_file = repo_path / ".proofpush" / "secrets.env"
+    file_values: Dict[str, str] = {}
+    if secrets_file.is_file():
+        exclude_from_git(repo_path)
+        for line in secrets_file.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and not key.startswith("#"):
+                file_values[key.strip()] = value.strip().strip("'\"")
+    def lookup(name: str) -> Optional[str]:
+        return (os.environ.get(name) or file_values.get(name)) if name else None
+
+    user, password = lookup(acc.username_env), lookup(acc.password_env)
+    if not user or not password:
+        return None, (f"Set {acc.username_env} and {acc.password_env} in your environment or in "
+                      f".proofpush/secrets.env (kept out of git) for the '{env_name}' test account, "
+                      f"or run `proofpush login --env {env_name}` to save a session")
+    return Credentials(user, password, lookup(acc.otp_secret_env)), ""
 
 
 def find_config_file(repo_path: Path) -> Optional[Path]:
@@ -185,27 +258,21 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
         config.routes.auto_discover = r.get("auto_discover", config.routes.auto_discover)
         config.routes.base_routes = r.get("base_routes", config.routes.base_routes)
         config.routes.excluded_routes = r.get("excluded_routes", config.routes.excluded_routes)
+        config.routes.crawl = bool(r.get("crawl", config.routes.crawl))
+        config.routes.max_pages = int(r.get("max_pages", config.routes.max_pages))
 
     if "workflows" in raw and isinstance(raw["workflows"], list):
         parsed_workflows = []
         for w in raw["workflows"]:
             if not isinstance(w, dict) or "name" not in w:
                 continue
-            steps = []
-            for s in w.get("steps", []):
-                if isinstance(s, dict) and "action" in s:
-                    steps.append(WorkflowStep(
-                        action=s["action"],
-                        selector=s.get("selector"),
-                        value=s.get("value"),
-                        expected=s.get("expected"),
-                        optional=s.get("optional", False),
-                    ))
+            steps = _parse_steps(w.get("steps", []))
             parsed_workflows.append(WorkflowConfig(
                 name=w["name"],
                 path=w.get("path", "/"),
                 steps=steps,
                 guard=bool(w.get("guard", False)),
+                prod=bool(w.get("prod", False)),
             ))
         config.workflows = parsed_workflows
 
@@ -241,6 +308,26 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
         p = raw["policies"]
         config.policies.fail_open = p.get("fail_open", config.policies.fail_open)
         config.policies.interactive_fallback = p.get("interactive_fallback", config.policies.interactive_fallback)
+
+    if isinstance(raw.get("auth"), dict):
+        a = raw["auth"]
+        config.auth = AuthConfig(
+            login_path=a.get("login_path", "/login"),
+            steps=_parse_steps(a.get("steps", [])),
+            accounts={
+                name: AccountConfig(
+                    username_env=acc.get("username_env", ""), password_env=acc.get("password_env", ""),
+                    otp_secret_env=acc.get("otp_secret_env", ""),
+                )
+                for name, acc in (a.get("accounts") or {}).items() if isinstance(acc, dict)
+            },
+        )
+
+    if isinstance(raw.get("environments"), dict):
+        config.environments = {
+            name: (env.get("url", "") if isinstance(env, dict) else str(env))
+            for name, env in raw["environments"].items()
+        }
 
     if "push_rules" in raw and isinstance(raw["push_rules"], dict):
         pr = raw["push_rules"]

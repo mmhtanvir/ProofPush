@@ -9,6 +9,9 @@ import os
 import re
 import socket
 import hashlib
+import time
+import hmac
+import base64
 import io
 import subprocess
 import sys
@@ -67,6 +70,31 @@ def open_user_terminal():
         return io.TextIOWrapper(raw, encoding="utf-8", line_buffering=True, write_through=True)
     except OSError:
         return None
+
+
+def totp(secret_b32: str, at: Optional[float] = None, digits: int = 6, period: int = 30) -> str:
+    """Current authenticator-app code (RFC 6238, HMAC-SHA1) for a base32 secret, as Google Authenticator shows it."""
+    key = base64.b32decode(secret_b32.replace(" ", "").upper() + "=" * (-len(secret_b32.replace(" ", "")) % 8))
+    counter = int((time.time() if at is None else at) // period)
+    digest = hmac.new(key, counter.to_bytes(8, "big"), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = (int.from_bytes(digest[offset:offset + 4], "big") & 0x7FFFFFFF) % (10 ** digits)
+    return str(code).zfill(digits)
+
+
+def exclude_from_git(repo_path: Path) -> None:
+    """Keep .proofpush/ (reports, secrets.env) out of `git add -A` via the repo-local .git/info/exclude."""
+    code, out, _ = run_command(["git", "rev-parse", "--git-common-dir"], cwd=repo_path)
+    if code != 0:
+        return
+    exclude = (repo_path / out.strip()) / "info" / "exclude"
+    try:
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if "/.proofpush/" not in existing.splitlines():
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            exclude.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "") + "/.proofpush/\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def redact_secrets(text: str) -> str:
