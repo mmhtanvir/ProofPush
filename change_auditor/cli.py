@@ -85,7 +85,15 @@ def install(global_mode: bool, skip_deps: bool):
         if res.get("preserved_legacy"):
             console.print("  [cyan]Notice:[/cyan] Existing pre-push hook preserved as pre-push.legacy and chained.")
     else:
-        console.print(f"[bold red]✘ Failed to install hook:[/bold red] {res.get('error')}")
+        err = res.get("error", "Unknown error")
+        console.print(f"[bold red]✘ Failed to install hook:[/bold red] {err}\n")
+        if "Not a git repository" in err:
+            console.print("[bold yellow]Tip:[/bold yellow] `proofpush install` installs a Git hook for a repository.")
+            console.print("  1. Navigate to your project folder first:")
+            console.print("     [cyan]cd /path/to/your/git-project[/cyan]")
+            console.print("     [cyan]proofpush install[/cyan]\n")
+            console.print("  2. Or enable ProofPush globally across all repositories on this machine:")
+            console.print("     [cyan]proofpush install --global[/cyan]")
         sys.exit(1)
 
 
