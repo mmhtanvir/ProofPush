@@ -259,6 +259,8 @@ def _run_api_tests(cfg: AuditorConfig, roots: List[Path], env_name: str, env_typ
     if env_type != "production":  # generated (and invalid) requests never go to production
         cases += api_testing.generate_cases(selected, opts.max_invalid_per_endpoint, auth_configured=bool(cand_headers),
                                             other_identity=next(iter(identities), None))
+    perm_cases, perm_problems = api_testing.permission_cases(opts.permissions, endpoints, list(identities))
+    cases += perm_cases  # explicit rules: production still needs prod-approved cases, so these run only off production
     policy = api_testing.Policy(env_type=env_type, remote_database=remote_db,
                                 allow_writes=opts.allow_writes if allow_writes is None else allow_writes)
     limits = api_testing.RunLimits(opts.max_requests, opts.rate_per_second, opts.timeout, opts.max_body_bytes)
@@ -266,7 +268,10 @@ def _run_api_tests(cfg: AuditorConfig, roots: List[Path], env_name: str, env_typ
                   + (f" incl. OpenAPI from {origin}" if origin else "") + f", {len(cases)} case(s)", markup=False)
     outcomes = api_testing.run_suite(cases, policy, limits, cand_url, cand_headers, base_url, base_headers,
                                      opts.normalize_fields, identities)
-    return api_testing.to_findings(outcomes, len(endpoints), f"{env_name} ({env_type})")
+    findings = api_testing.to_findings(outcomes, len(endpoints), f"{env_name} ({env_type})")
+    if perm_problems:
+        findings.append(_blocked("Permission matrix", "; ".join(perm_problems[:5])))
+    return findings
 
 
 def _compare_test_suites(cfg: AuditorConfig, base_dir: Path, prop_dir: Path,

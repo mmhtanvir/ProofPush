@@ -12,6 +12,8 @@ Covers:
 - Scenario 69: Database safety: remote/production databases block test suites and migrations
 - Scenario 70: Backward compatibility: configs without api_tests behave as before
 - Scenario 72: A second test identity reading the first one's resource (IDOR) is a regression when it's new
+- Scenario 81: Permission matrix: owner allowed, anonymous/other denied; newly allowed access is privilege escalation
+- Scenario 82: A response that starts exposing sensitive fields (names only in the report) is a regression
 - Scenario 71: Pre-push hook end to end (AI agent, strict): a backend change that removes an endpoint and
   brings back a fixed bug is blocked without prompting
 """
@@ -293,3 +295,35 @@ class TestApiTesting(GitRepoTestCase):
             env = em.launch_environment("HEAD", "baseline")
             em.cleanup()
             self.assertIn("needs Docker or Podman", env.startup_error)
+
+    def test_scenario_81_permission_matrix(self):
+        rules = [{"path": "/api/notes/{note_id}", "GET": ["owner"]}, {"path": "/api/orders/{id}", "GET": ["owner"]}]
+        cases, problems = at.permission_cases(rules, self.endpoints(), ["other"])
+        self.assertEqual([c.name for c in cases], ["owner may GET", "anonymous must not GET", "other must not GET"])
+        self.assertIn("example_path", problems[0])  # /api/orders/{id} is unknown and has no example
+        ids = {"other": {"Authorization": "Bearer other-token"}}
+        out = {o.case.name: o for o in at.run_suite(cases, at.Policy("local"), at.RunLimits(rate_per_second=1000),
+                                                     self.start("bad"), AUTH, self.start("good"), AUTH, identities=ids)}
+        self.assertEqual(out["owner may GET"].classification, "passed")
+        self.assertEqual(out["anonymous must not GET"].classification, "passed")
+        other = out["other must not GET"]
+        self.assertEqual(other.classification, "regression")
+        self.assertIn("privilege escalation", other.details[0])
+        self.assertEqual(other.source, "permission matrix")
+        # Production never runs generated permission probes
+        self.assertIsNotNone(at.Policy("production").refusal(cases[0]))
+
+    def test_scenario_82_sensitive_fields_exposed(self):
+        case = at.ApiCase(name="valid request", method="GET", path="/api/me")
+        before = at.ApiResult(status=200, ms=5, body={"id": 1, "name": "Ann"})
+        after = at.ApiResult(status=200, ms=5, body={"id": 1, "name": "Ann", "password_hash": "pbkdf2$abc$secret",
+                                                     "profile": {"api_key": "sk-live-123456789012345678901"}})
+        out = at.classify(case, before, after, [])
+        self.assertEqual(out.classification, "regression")
+        self.assertIn("response exposes sensitive field $.password_hash", out.details)
+        self.assertIn("response exposes sensitive field $.profile.api_key", out.details)
+        text = repr(at.to_findings([out], 1, "local"))
+        self.assertNotIn("pbkdf2$abc$secret", text)
+        self.assertNotIn("sk-live-123456789012345678901", text)
+        self.assertEqual(at.classify(case, after, after, []).classification, "existing_failure")
+

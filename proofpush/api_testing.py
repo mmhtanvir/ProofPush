@@ -71,7 +71,8 @@ class ApiCase:
     body_kind: str = "json"  # json | form | raw
     headers: Dict[str, str] = field(default_factory=dict)
     with_auth: bool = True
-    kind: str = "valid"  # valid | invalid | unauth | other_user | explicit
+    kind: str = "valid"  # valid | invalid | unauth | other_user | permission | explicit
+    allowed: Optional[bool] = None  # permission cases: whether this identity is supposed to succeed
     identity: str = ""  # which configured test identity sends it ("" = the main one)
     expect_status: Optional[List[int]] = None
     expect_body: Dict[str, Any] = field(default_factory=dict)  # "$.a.b[0]" -> value
@@ -402,6 +403,47 @@ def generate_cases(endpoints: List[Endpoint], max_invalid: int = 4, auth_configu
     return cases
 
 
+SENSITIVE_FIELD = re.compile(r"^(password|password_?hash|passwd|secret|client_secret|api_?key|access_?token|refresh_?token|"
+                             r"token|session_?id|ssn|card_?number|cvv|private_?key|otp_?secret|totp_?secret)$", re.I)
+
+
+def permission_cases(rules: List[Dict[str, Any]], endpoints: List[Endpoint], identities: List[str]) -> Tuple[List[ApiCase], List[str]]:
+    """Cases for a permission matrix; returns (cases, problems) where problems are rules that can't be exercised.
+
+    Each rule: {path, <METHOD>: [allowed identities]}. Identities: owner (the main credentials), anonymous,
+    and any configured `<env>:<name>`; every identity not listed for a method must be denied.
+    """
+    cases, problems = [], []
+    known = {e.key: e for e in endpoints}
+    everyone = ["owner", "anonymous"] + [i for i in identities if i not in ("owner", "anonymous")]
+    for rule in rules or []:
+        if not isinstance(rule, dict) or not rule.get("path"):
+            problems.append(f"permission rule without a path: {rule}")
+            continue
+        for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+            if method not in rule:
+                continue
+            allowed = set(rule[method] or [])
+            unknown = allowed - set(everyone)
+            if unknown:
+                problems.append(f"{method} {rule['path']}: no credentials for {', '.join(sorted(unknown))}")
+            ep = known.get(f"{method} {rule['path']}") or Endpoint(method=method, path=rule["path"], source="config", confidence=1.0)
+            if "{" in rule["path"] and not (ep.params or ep.sample_path) and not rule.get("example_path"):
+                problems.append(f"{method} {rule['path']}: add example_path (a concrete URL to a test-owned resource)")
+                continue
+            path, query = (rule["example_path"], {}) if rule.get("example_path") else _fill_path(ep)
+            body = sample_value(ep.body_schema) if ep.body_schema else rule.get("payload")
+            for who in everyone:
+                ok = who in allowed
+                cases.append(ApiCase(
+                    name=f"{who} {'may' if ok else 'must not'} {method}", method=method, path=path, endpoint=ep,
+                    query=query, body=body, kind="permission", allowed=ok,
+                    identity="" if who in ("owner", "anonymous") else who, with_auth=who != "anonymous",
+                    expect_status=None if ok else [401, 403, 404],
+                ))
+    return cases, problems
+
+
 def cases_from_config(raw_cases: List[Dict[str, Any]]) -> List[ApiCase]:
     """Developer-written cases: the strongest expectations ProofPush has."""
     def one(c: Dict[str, Any]) -> ApiCase:
@@ -539,6 +581,11 @@ _MISSING = object()
 
 # --- comparison ----------------------------------------------------------------------------------------------
 
+def sensitive_fields(data: Any) -> set:
+    """JSON paths whose key names a secret (password, token, card number...): names only, never values."""
+    return {p for p in flatten(data) if SENSITIVE_FIELD.match(p.rsplit(".", 1)[-1].replace("[]", ""))}
+
+
 def flatten(data: Any, prefix: str = "$", out: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Leaf paths -> values; list items collapse to [] (first item) so different list lengths still line up."""
     out = {} if out is None else out
@@ -620,7 +667,7 @@ def check_expectations(case: ApiCase, res: ApiResult) -> Tuple[List[str], str]:
         return [res.error], "response"
     failures = list(res.step_failures)
     source = "explicit assertion" if case.kind == "explicit" else ("API contract" if case.expect_status else "")
-    if case.expect_status and res.status not in case.expect_status:
+    if case.expect_status and res.status not in case.expect_status and case.kind != "permission":
         failures.append(f"status {res.status}, expected {'/'.join(map(str, case.expect_status))}")
     for p, want in case.expect_body.items():
         got = json_path(res.body, p)
@@ -648,6 +695,13 @@ def check_expectations(case: ApiCase, res: ApiResult) -> Tuple[List[str], str]:
     if case.kind == "invalid" and not case.expect_status and res.status is not None and res.status < 400:
         failures.append(f"accepted invalid input ({case.name}) with {res.status}")
         source = source or "input validation"
+    if case.kind == "permission" and res.status is not None:
+        who = case.name.split(" ")[0]
+        if case.allowed and res.status in (401, 403, 404, 405):
+            failures.append(f"{who} should be allowed to {case.method} but got {res.status}")
+        elif not case.allowed and res.status < 400:
+            failures.append(f"{who} must not be able to {case.method} this, but got {res.status} (privilege escalation)")
+        source = "permission matrix"
     if case.kind == "other_user" and res.status is not None and res.status < 300:
         failures.append(f"another test user ({case.identity}) can read this resource ({res.status})")
         source = source or "authorization"
@@ -657,6 +711,11 @@ def check_expectations(case: ApiCase, res: ApiResult) -> Tuple[List[str], str]:
     if res.status is not None and res.status >= 500:
         failures.append(f"server error {res.status}")
         source = source or "server error"
+    # Secrets in a response body, one finding per field (names only) so a newly exposed field counts as new
+    exposed = [f"response exposes sensitive field {p}" for p in sorted(sensitive_fields(res.body))]
+    if exposed:
+        failures += exposed
+        source = source or "sensitive data"
     return failures, source or "baseline behaviour"
 
 
@@ -744,6 +803,8 @@ class Runner:
             if not self._throttle():
                 return result
             creds = self.identities.get(step.identity, auth) if step.identity else auth
+            if not step.with_auth:
+                creds = {}
             r = http_call(base_url, step, creds, self.limits.timeout, self.limits.max_body_bytes, variables)
             for name, path in step.save.items():
                 value = json_path(r.body, path)

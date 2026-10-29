@@ -391,7 +391,27 @@ api_tests:
 
 It's a regression when the old version denied the other user and the new one allows it; when both allow it, it's reported as existing so you can confirm the data is meant to be shared. Endpoints the OpenAPI schema marks as public are skipped.
 
-**Not covered yet**: role matrices beyond two identities, disposable databases other than PostgreSQL, background jobs/queues, multipart uploads, and AI-proposed payloads. Without an OpenAPI schema, request bodies can't be generated: write explicit `cases` for important write endpoints.
+**Permission matrix**: list who may do what, and every other configured identity (plus `anonymous`) is checked to be denied:
+
+```yaml
+api_tests:
+  auth:
+    local:          {Authorization: "Bearer {OWNER_TOKEN}"}     # "owner"
+    local:other:    {Authorization: "Bearer {OTHER_TOKEN}"}
+    local:readonly: {Authorization: "Bearer {READONLY_TOKEN}"}
+    local:admin:    {Authorization: "Bearer {ADMIN_TOKEN}"}
+  permissions:
+    - path: /api/notes/{id}
+      example_path: /api/notes/42      # a resource the owner test account owns (needed when the id can't be inferred)
+      GET: [owner, admin]
+      DELETE: [owner]
+```
+
+An allowed identity that is now denied is a regression; a denied one that now succeeds is reported as **privilege escalation**. Write methods follow the write-safety rules; permission probes never run against production.
+
+**Sensitive data in responses**: a response containing fields named like `password`, `password_hash`, `token`, `secret`, `api_key`, `card_number`, `cvv`, `ssn`, `otp_secret` is flagged per field (names only, never values). A newly exposed field is a regression; one exposed in both versions is reported as existing.
+
+**Not covered yet**: disposable databases other than PostgreSQL, background jobs/queues, multipart uploads, and AI-proposed payloads. Without an OpenAPI schema, request bodies can't be generated: write explicit `cases` for important write endpoints.
 
 ---
 
@@ -588,7 +608,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 83-scenario test suite |
+| `proofpush test` | Runs the built-in 85-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -604,11 +624,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 83 real-world developer scenarios:
+ProofPush is tested against 85 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 83 tests in 55s (OK)
+# Ran 85 tests in 55s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

@@ -180,6 +180,7 @@ class ApiTestsConfig:
     max_body_bytes: int = 1_000_000
     max_invalid_per_endpoint: int = 4
     auth: Dict[str, Dict[str, str]] = field(default_factory=dict)  # environment -> headers ({NAME} from secrets)
+    permissions: List[Dict[str, Any]] = field(default_factory=list)  # [{path, GET: [owner, admin], DELETE: [owner]}]
 
 
 @dataclass
@@ -429,6 +430,7 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
             timeout=float(a.get("timeout", d.timeout)), max_body_bytes=int(a.get("max_body_bytes", d.max_body_bytes)),
             max_invalid_per_endpoint=int(a.get("max_invalid_per_endpoint", d.max_invalid_per_endpoint)),
             auth={str(k): {str(h): str(v) for h, v in (hv or {}).items()} for k, hv in (a.get("auth") or {}).items()},
+            permissions=[r for r in a.get("permissions") or [] if isinstance(r, dict)],
         )
 
     if isinstance(raw.get("tests"), dict):
