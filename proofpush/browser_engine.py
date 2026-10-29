@@ -306,6 +306,7 @@ class BrowserEngine:
         if self._browser is not None and self._loop is asyncio.get_running_loop():
             await self._browser.close()
             await self._playwright.stop()
+            await asyncio.sleep(0.1)  # let the driver's pipe transports finish closing while the loop still runs
         self._browser = self._playwright = self._loop = None
 
     async def visit_page(

@@ -41,7 +41,12 @@ jobs:
           import re
           text = open("test-output.txt", encoding="utf-8", errors="replace").read()
           for block in re.split(r"^={50,}$", text, flags=re.M)[1:]:
-              lines = [l for l in block.strip().splitlines() if l.strip() and not set(l.strip()) <= {"-"}]
+              lines = []
+              for l in block.strip().splitlines():
+                  if l.startswith("Exception ignored"):  # interpreter cleanup noise, not the test's own traceback
+                      break
+                  if l.strip() and not set(l.strip()) <= {"-"}:
+                      lines.append(l)
               if not lines or not lines[0].startswith(("FAIL:", "ERROR:")):
                   continue
               detail = "%0A".join(l.replace("%", "%25") for l in lines[1:][-12:])

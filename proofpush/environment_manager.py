@@ -21,7 +21,7 @@ from typing import Any, Optional, List
 import subprocess
 
 from proofpush.config import ApplicationConfig, ServiceConfig
-from proofpush.utils import find_free_port, run_command
+from proofpush.utils import find_free_port, run_command, urlopen
 
 
 @dataclass
@@ -241,7 +241,7 @@ class EnvironmentManager:
 
             try:
                 req = urllib.request.Request(health_url, headers={"User-Agent": "proofpush-healthcheck"})
-                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                with urlopen(req, timeout=1.5) as resp:
                     if resp.status in (200, 204, 301, 302, 304, 401, 403):
                         ready = True
                         break

@@ -14,6 +14,8 @@ import hmac
 import base64
 import io
 import subprocess
+import urllib.parse
+import urllib.request
 import sys
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
@@ -127,6 +129,19 @@ def sanitize_dict_secrets(data: Dict[str, Any]) -> Dict[str, Any]:
         else:
             result[k] = v
     return result
+
+
+# Requests to the app copies ProofPush itself runs must never go through a proxy (HTTP_PROXY, or macOS system
+# proxy lookups, which can hang in CI/sandboxed processes)
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def urlopen(req, timeout: float):
+    """urllib.request.urlopen, but loopback URLs skip proxy settings entirely."""
+    host = urllib.parse.urlparse(req.full_url if hasattr(req, "full_url") else str(req)).hostname or ""
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return _NO_PROXY_OPENER.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 def find_free_port(start: int = 3100, max_tries: int = 100) -> int:

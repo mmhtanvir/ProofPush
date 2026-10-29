@@ -130,7 +130,8 @@ class TestAuth(GitRepoTestCase):
         self.assertIn("BIN_CMD=('/opt/My Python/bin/python3' -m proofpush)", hook)
         script = self.test_dir / "hook.sh"
         script.write_text(hook)
-        self.assertEqual(subprocess.run(["bash", "-n", str(script)]).returncode, 0)
+        if sys.platform != "win32":  # Windows' PATH bash may be WSL's; hooks run under Git Bash
+            self.assertEqual(subprocess.run(["bash", "-n", str(script)]).returncode, 0)
 
     def test_scenario_45b_captcha_is_explained_not_bypassed(self):
         """A login page with Turnstile/reCAPTCHA/hCaptcha yields advice (test keys locally, `proofpush login` in prod)."""

@@ -40,8 +40,8 @@ class TestInteractions(GitRepoTestCase):
         site = self.test_dir / "site"
         (site / "v1").mkdir(parents=True)
         (site / "v2").mkdir()
-        (site / "v1" / "p.html").write_text(PAGE.format(star=STAR, more=MORE_FAST, filters=FILTERS))
-        (site / "v2" / "p.html").write_text(PAGE.format(star="", more=MORE_SLOW, filters=""))
+        (site / "v1" / "p.html").write_text(PAGE.format(star=STAR, more=MORE_FAST, filters=FILTERS), encoding="utf-8")
+        (site / "v2" / "p.html").write_text(PAGE.format(star="", more=MORE_SLOW, filters=""), encoding="utf-8")
         self.v1, self.v2 = (site / "v1").as_uri(), (site / "v2").as_uri()
 
     def compare(self):

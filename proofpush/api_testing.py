@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from proofpush.classifier import Finding
-from proofpush.utils import redact_secrets
+from proofpush.utils import redact_secrets, urlopen
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 SENSITIVE_KEY = re.compile(r"pass(word)?|secret|token|api[-_]?key|authori[sz]ation|cookie|session|credit|card|cvv|ssn|otp", re.I)
@@ -474,7 +474,7 @@ def http_call(base_url: str, case: ApiCase, auth_headers: Dict[str, str], timeou
     req = urllib.request.Request(url, data=data, method=case.method, headers=headers)
     start = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout) as resp:
             status, raw = resp.status, resp.read(max_body + 1)
     except urllib.error.HTTPError as exc:
         with exc:
