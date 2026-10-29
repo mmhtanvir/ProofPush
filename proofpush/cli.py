@@ -24,6 +24,7 @@ from proofpush.task_resolver import TaskResolver, TaskContext
 from proofpush.baseline_manager import BaselineManager, BaselineMetadata
 from proofpush.environment_manager import EnvironmentManager
 from proofpush.route_discoverer import RouteDiscoverer
+from proofpush.fix_history import FixHistoryGuard
 from proofpush.browser_engine import BrowserEngine
 from proofpush.visual_comparator import VisualComparator
 from proofpush.unrelated_analyzer import UnrelatedAnalyzer
@@ -227,7 +228,8 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
 
     # 5. Environment Management
     env_mgr = EnvironmentManager(repo_path, cfg.application)
-    findings: List[Finding] = []
+    # Past fixes this push undoes (git history only, works for any project)
+    findings: List[Finding] = FixHistoryGuard(repo_path).analyze(baseline_sha, proposed_sha)
     visual_results = []
     routes_checked_count = 0
     workflows_checked_count = 0

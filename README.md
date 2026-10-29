@@ -103,6 +103,7 @@ flowchart LR
 3. **Visual Diffing**: Normalizes viewport dimensions, freezes animations, and generates visual bounding boxes for shifted elements.
 4. **Leak Guard**: Scans diffs for leaked secrets (`sk-...`, AWS keys, tokens) and flags deleted test suites.
 5. **Chains Existing Hooks**: Preserves your existing pre-push hooks by automatically backing them up and chaining them.
+6. **Fixed Bugs Stay Fixed (zero config)**: Reads your Git history for past fix commits (`fix`, `bug`, `hotfix`, ...) touching the files you're pushing, and flags the push if it brings their buggy code back. Works in any language or framework, no setup. Pushes to an existing branch are compared against what is live on it now, so a force-push from a stale checkout can't hide a reverted fix. Add `guard: true` workflows to pin specific bugs in the browser too.
 
 ---
 
@@ -225,7 +226,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 30-scenario test suite |
+| `proofpush test` | Runs the built-in 33-scenario test suite |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
 ---
@@ -240,14 +241,14 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 30 real-world developer scenarios:
+ProofPush is tested against 33 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 30 tests in 11.5s (OK)
+# Ran 33 tests in 12s (OK)
 ```
 
-Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, and destructive action prevention.
+Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.
 
 ---
 

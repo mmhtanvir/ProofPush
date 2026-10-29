@@ -6,6 +6,7 @@ Covers:
 - Scenario 18: Secret in outgoing commits
 - Scenario 27: Malicious commit message attempting prompt injection
 - Scenario 28: Test workflow that could cause a destructive action
+- Scenario 33: Push that undoes a past fix commit (zero-config, from git history)
 """
 
 import io
@@ -24,6 +25,8 @@ from proofpush.task_resolver import TaskResolver, TaskContext
 from proofpush.unrelated_analyzer import UnrelatedAnalyzer
 from proofpush.visual_comparator import VisualComparator
 from proofpush.browser_engine import DESTRUCTIVE_KEYWORDS
+from proofpush.fix_history import FixHistoryGuard
+from proofpush.utils import run_command
 
 
 class TestVisualAndUnrelated(GitRepoTestCase):
@@ -108,3 +111,42 @@ class TestVisualAndUnrelated(GitRepoTestCase):
         self.assertIn("button.delete-all-records", destructive)
         self.assertIn("a#purge-database", destructive)
         self.assertIn("button.charge-credit-card", destructive)
+
+    def test_scenario_33_push_undoes_past_fix(self):
+        """Scenario 33: Git-history guard flags pushes that revert or partly undo a past fix, and nothing else."""
+        buggy = "function total(cart) {\n  const count = cart.items.length;\n  return count * cart.price;\n}\n"
+        fixed = "function total(cart) {\n  return cart.items.reduce((s, i) => s + i.price * i.qty, 0);\n}\n"
+        self.commit_file("cart.js", buggy, "initial cart")
+        self.commit_file("other.js", "export const answer = 42;\n", "add other")
+        fix_sha = self.commit_file("cart.js", fixed, "Fix cart total ignoring quantity")
+        guard = FixHistoryGuard(self.local_dir)
+
+        # Unrelated edit in the same file: no finding
+        ok_sha = self.commit_file("cart.js", fixed + "export const currency = 'USD';\n", "add currency")
+        self.assertEqual(guard.analyze(fix_sha, ok_sha), [])
+
+        # Stale copy puts the buggy line back: critical regression naming the fix
+        bad_sha = self.commit_file("cart.js", buggy + "export const currency = 'USD';\n", "tweak cart")
+        findings = guard.analyze(ok_sha, bad_sha)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].category, "REGRESSION")
+        self.assertTrue(findings[0].is_critical)
+        self.assertIn(fix_sha[:10], findings[0].target)
+
+        # Fix line removed without the bug coming back: an ordinary rewrite, no finding
+        run_command(["git", "reset", "-q", "--hard", ok_sha], cwd=self.local_dir)
+        gone_sha = self.commit_file("cart.js", "function total(cart) {\n  return 0;\n}\nexport const currency = 'USD';\n", "simplify")
+        self.assertEqual(guard.analyze(ok_sha, gone_sha), [])
+
+        # Buggy line back alongside the fix: warning only
+        run_command(["git", "reset", "-q", "--hard", ok_sha], cwd=self.local_dir)
+        both_sha = self.commit_file("cart.js", fixed + "function legacyTotal(cart) {\n  const count = cart.items.length;\n  return count * cart.price;\n}\n", "legacy total")
+        findings = guard.analyze(ok_sha, both_sha)
+        self.assertEqual([f.category for f in findings], ["POSSIBLE_REGRESSION"])
+        self.assertFalse(findings[0].is_critical)
+
+        # Deleting the fixed file entirely removes the bug too: no finding
+        run_command(["git", "rm", "-q", "cart.js"], cwd=self.local_dir)
+        run_command(["git", "commit", "-qm", "remove cart"], cwd=self.local_dir)
+        _, del_sha, _ = run_command(["git", "rev-parse", "HEAD"], cwd=self.local_dir)
+        self.assertEqual(guard.analyze(both_sha, del_sha.strip()), [])
