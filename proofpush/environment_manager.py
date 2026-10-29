@@ -44,6 +44,7 @@ class AppEnvironment:
     frontend: Optional[ServiceInstance] = None
     backend: Optional[ServiceInstance] = None
     db_path: Optional[Path] = None
+    database_url: Optional[str] = None  # disposable database for this version, when application.database is set
     is_ready: bool = False
     startup_error: Optional[str] = None
 
@@ -57,6 +58,7 @@ class EnvironmentManager:
         self.repo_path = repo_path.resolve()
         self.app_config = app_config
         self.active_environments: List[AppEnvironment] = []
+        self._containers: List[tuple] = []  # (docker binary, container name) for disposable databases
         self._temp_base_dir: Optional[Path] = None
 
     def _get_temp_dir(self) -> Path:
@@ -80,6 +82,26 @@ class EnvironmentManager:
 
         self._link_local_files(temp_dir)
         return temp_dir
+
+    def _start_postgres(self, label: str):
+        """A throwaway PostgreSQL for one version: (url, None) or (None, why not). Never falls back to your database."""
+        docker = shutil.which("docker") or shutil.which("podman")
+        if not docker:
+            return None, "application.database: postgres needs Docker or Podman, which isn't installed"
+        port = find_free_port(start=5500 + (100 if label == "proposed" else 0))
+        name = f"proofpush-{label}-{os.getpid()}-{int(time.time() * 1000) % 100000}"
+        code, out, err = run_command([docker, "run", "-d", "--rm", "--name", name, "-e", "POSTGRES_USER=proofpush",
+                                      "-e", "POSTGRES_PASSWORD=proofpush", "-e", "POSTGRES_DB=proofpush",
+                                      "-p", f"127.0.0.1:{port}:5432", self.app_config.database_image], timeout=300)
+        if code != 0:
+            return None, f"Could not start a disposable PostgreSQL ({(err or out).strip()[:200]}). Is Docker running?"
+        self._containers.append((docker, name))
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if run_command([docker, "exec", name, "pg_isready", "-U", "proofpush", "-d", "proofpush"], timeout=10)[0] == 0:
+                return f"postgresql://proofpush:proofpush@127.0.0.1:{port}/proofpush", None
+            time.sleep(0.5)
+        return None, "The disposable PostgreSQL did not become ready within 60 s"
 
     def _link_local_files(self, worktree: Path) -> None:
         """Give the checkout what git doesn't track but apps need to start: installed dependencies and .env files.
@@ -110,6 +132,11 @@ class EnvironmentManager:
         # Setup isolated database path if sqlite is used
         db_file = worktree / ".auditor_test.db"
         env.db_path = db_file
+        if self.app_config.database == "postgres":
+            env.database_url, problem = self._start_postgres(label)
+            if problem:
+                env.startup_error = problem
+                return env
 
         # If no start command configured, check if it's static HTML or return ready
         start_cmd = self.app_config.start_command
@@ -132,6 +159,7 @@ class EnvironmentManager:
                 port=backend_port,
                 cwd=worktree,
                 db_path=db_file,
+                database_url=env.database_url,
             )
             env.backend = backend_instance
             if not backend_instance.is_ready:
@@ -154,6 +182,7 @@ class EnvironmentManager:
             cwd=worktree,
             db_path=db_file,
             backend_port=env.backend.port if env.backend else None,
+            database_url=env.database_url,
         )
         env.frontend = fe_instance
         if not fe_instance.is_ready:
@@ -171,6 +200,7 @@ class EnvironmentManager:
         cwd: Path,
         db_path: Path,
         backend_port: Optional[int] = None,
+        database_url: Optional[str] = None,
     ) -> ServiceInstance:
         """Launch a service process and wait for readiness."""
         base_url = f"http://127.0.0.1:{port}"
@@ -181,7 +211,7 @@ class EnvironmentManager:
         proc_env["PORT"] = str(port)
         proc_env["AUDITOR_PORT"] = str(port)
         proc_env["BASE_URL"] = base_url
-        proc_env["DATABASE_URL"] = f"sqlite:///{db_path}"
+        proc_env["DATABASE_URL"] = database_url or f"sqlite:///{db_path}"
         proc_env["PROOFPUSH_RUNNING"] = "1"
         if backend_port:
             proc_env["BACKEND_URL"] = f"http://127.0.0.1:{backend_port}"
@@ -298,6 +328,10 @@ class EnvironmentManager:
                     shutil.rmtree(env.worktree_path, ignore_errors=True)
 
         run_command(["git", "worktree", "prune"], cwd=self.repo_path)
+
+        for docker, name in self._containers:
+            run_command([docker, "rm", "-f", name], timeout=60)
+        self._containers.clear()
 
         if self._temp_base_dir and self._temp_base_dir.exists():
             shutil.rmtree(self._temp_base_dir, ignore_errors=True)

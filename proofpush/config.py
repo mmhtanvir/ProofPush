@@ -71,6 +71,9 @@ class ApplicationConfig:
     health_timeout: int = 30
     env: Dict[str, str] = field(default_factory=dict)
     backend: Optional[ServiceConfig] = None
+    # "postgres": a disposable PostgreSQL container per version (needs Docker/Podman); its URL becomes DATABASE_URL
+    database: str = ""
+    database_image: str = "postgres:16-alpine"
 
 
 @dataclass
@@ -317,6 +320,12 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
         config.application.health_check = a.get("health_check", config.application.health_check)
         config.application.health_timeout = int(a.get("health_timeout", config.application.health_timeout))
         config.application.env = a.get("env", {})
+        db = a.get("database")
+        if isinstance(db, dict):
+            config.application.database = str(db.get("engine", "")).lower()
+            config.application.database_image = str(db.get("image", config.application.database_image))
+        elif db:
+            config.application.database = str(db).lower()
         if "backend" in a and isinstance(a["backend"], dict):
             bk = a["backend"]
             config.application.backend = ServiceConfig(

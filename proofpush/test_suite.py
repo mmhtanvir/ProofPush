@@ -71,9 +71,9 @@ def detect_test_command(root: Path) -> Optional[str]:
     return None
 
 
-def run_suite(root: Path, command: str, timeout: int) -> SuiteRun:
+def run_suite(root: Path, command: str, timeout: int, database_url: Optional[str] = None) -> SuiteRun:
     cmd = command.replace("{python}", _python(root))
-    env = {**os.environ, "CI": "1", "PROOFPUSH_RUNNING": "1"}
+    env = {**os.environ, "CI": "1", "PROOFPUSH_RUNNING": "1", **({"DATABASE_URL": database_url} if database_url else {})}
     try:
         proc = subprocess.run(cmd, cwd=root, shell=True, capture_output=True, text=True, timeout=timeout, env=env,
                               encoding="utf-8", errors="replace")

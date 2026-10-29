@@ -269,21 +269,23 @@ def _run_api_tests(cfg: AuditorConfig, roots: List[Path], env_name: str, env_typ
     return api_testing.to_findings(outcomes, len(endpoints), f"{env_name} ({env_type})")
 
 
-def _compare_test_suites(cfg: AuditorConfig, base_dir: Path, prop_dir: Path) -> List[Finding]:
+def _compare_test_suites(cfg: AuditorConfig, base_dir: Path, prop_dir: Path,
+                         base_db: Optional[str] = None, prop_db: Optional[str] = None) -> List[Finding]:
     """The project's own tests on both versions (backend logic included): newly failing tests are regressions."""
     if not cfg.tests.enabled:
         return []
     command = cfg.tests.command or test_suite.detect_test_command(prop_dir)
     # Test runners create/flush databases: refuse when the app's settings point at a shared or production one
-    db = api_testing.remote_database({**api_testing.read_env_files(prop_dir), **os.environ})
+    db = api_testing.remote_database({**api_testing.read_env_files(prop_dir), **os.environ,
+                                      **({"DATABASE_URL": prop_db} if prop_db else {})})
     if db and not cfg.tests.allow_remote_database:
         return [_blocked("Test suite", f"Not run: the app's environment points at a non-local database ({db}). "
                                        "Point tests at a local/disposable database, or set tests.allow_remote_database if that is safe.")]
     if not command:
         return [_blocked("Test suite", "tests.enabled is on but no test command was found; set tests.command")]
     console.print(f"Running the project's tests on both versions: {command}", markup=False)
-    before = test_suite.run_suite(base_dir, command, cfg.tests.timeout)
-    after = test_suite.run_suite(prop_dir, command, cfg.tests.timeout)
+    before = test_suite.run_suite(base_dir, command, cfg.tests.timeout, base_db)
+    after = test_suite.run_suite(prop_dir, command, cfg.tests.timeout, prop_db)
     return test_suite.compare_suites(before, after)
 
 
@@ -694,7 +696,8 @@ def _audit_update(
             # Launch proposed environment
             console.print("Launching isolated proposed environment...")
             prop_env = env_mgr.launch_environment(proposed_sha, label="proposed")
-            findings.extend(_compare_test_suites(cfg, base_env.worktree_path, prop_env.worktree_path))
+            findings.extend(_compare_test_suites(cfg, base_env.worktree_path, prop_env.worktree_path,
+                                                 base_env.database_url, prop_env.database_url))
 
             if not base_env.is_ready or not prop_env.is_ready:
                 err_msg = prop_env.startup_error or base_env.startup_error or "Application failed to become ready"
@@ -876,7 +879,8 @@ def _audit_update(
                         return (env.backend or env.frontend).base_url
                     def cookies(url):
                         return (browser_engine.sessions.get(url) or {}).get("cookies")
-                    app_env = {**api_testing.read_env_files(prop_env.worktree_path), **cfg.application.env}
+                    app_env = {**api_testing.read_env_files(prop_env.worktree_path), **cfg.application.env,
+                               **({"DATABASE_URL": prop_env.database_url} if prop_env.database_url else {})}
                     changed = run_command(["git", "diff", "--name-only", baseline_sha, proposed_sha], cwd=repo_path)[1].split()
                     findings.extend(_run_api_tests(
                         cfg, [base_env.worktree_path, prop_env.worktree_path], "local", "local",

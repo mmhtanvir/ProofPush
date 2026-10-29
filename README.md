@@ -332,7 +332,8 @@ environments:
 
 **Safety rules (always on)**
 - Production: approved read-only cases only; never fuzzing, never generated requests, never the project's test suite.
-- Writes need `allow_writes`, and locally they are refused when the app's settings point at a non-local or production database (`DATABASE_URL`, `DB_HOST`, `ENV=production`, ...). ProofPush gives each local version its own `DATABASE_URL=sqlite:///...`, which only isolates apps that read `DATABASE_URL`.
+- Writes need `allow_writes`, and locally they are refused when the app's settings point at a non-local or production database (`DATABASE_URL`, `DB_HOST`, `ENV=production`, ...).
+- **Database per version**: by default each local version gets its own `DATABASE_URL=sqlite:///...`, which only isolates apps that read `DATABASE_URL`. For PostgreSQL apps, `application.database: postgres` starts a throwaway PostgreSQL container for **each** version (Docker or Podman), passes it as `DATABASE_URL` to the app and to the project's tests, and removes it afterwards. If the container can't start, the audit says so instead of falling back to your database. Run your migrations from `start_command` (e.g. `python manage.py migrate && python manage.py runserver 127.0.0.1:$PORT`).
 - Generated writes to payment, email, SMS, webhook, upload or import endpoints are never sent; write an explicit case if you want them tested.
 - An app whose start command runs migrations is not started while its database is non-local; `tests.enabled` refuses to run the project's tests in that situation too (`tests.allow_remote_database` overrides).
 - Tokens, cookies, passwords and sensitive query values are masked in every report.
@@ -372,7 +373,7 @@ api_tests:
 
 It's a regression when the old version denied the other user and the new one allows it; when both allow it, it's reported as existing so you can confirm the data is meant to be shared. Endpoints the OpenAPI schema marks as public are skipped.
 
-**Not covered yet**: role matrices beyond two identities, disposable PostgreSQL per version, background jobs/queues, multipart uploads, and AI-proposed payloads. Without an OpenAPI schema, request bodies can't be generated: write explicit `cases` for important write endpoints.
+**Not covered yet**: role matrices beyond two identities, disposable databases other than PostgreSQL, background jobs/queues, multipart uploads, and AI-proposed payloads. Without an OpenAPI schema, request bodies can't be generated: write explicit `cases` for important write endpoints.
 
 ---
 
@@ -569,7 +570,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 75-scenario test suite |
+| `proofpush test` | Runs the built-in 76-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -585,11 +586,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 75 real-world developer scenarios:
+ProofPush is tested against 76 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 75 tests in 52s (OK)
+# Ran 76 tests in 52s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

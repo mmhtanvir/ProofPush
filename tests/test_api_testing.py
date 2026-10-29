@@ -246,3 +246,47 @@ class TestApiTesting(GitRepoTestCase):
         missing = at.run_suite(cases[:1], at.Policy("local"), at.RunLimits(), self.start("good"), AUTH, identities={})
         self.assertIn("has no credentials", missing[0].refusal)
 
+
+    def test_scenario_73_disposable_postgres_per_version(self):
+        """application.database: postgres gives each version its own throwaway database (Docker stood in by a script)."""
+        if sys.platform == "win32":
+            self.skipTest("stand-in docker is a shell script")
+        from proofpush.config import ApplicationConfig
+        from proofpush.environment_manager import EnvironmentManager
+        bin_dir = self.test_dir / "bin"
+        bin_dir.mkdir()
+        log = self.test_dir / "docker.log"
+        fake = bin_dir / "docker"
+        fake.write_text('#!/bin/sh\necho "$@" >> "$FAKE_DOCKER_LOG"\n'
+                        'if [ "$1" = run ] && [ -n "$FAKE_DOCKER_DOWN" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi\n'
+                        'if [ "$1" = run ]; then echo cid; fi\nexit 0\n')
+        fake.chmod(0o755)
+        self.commit_file("app.py", "import http.server, os\nopen('db.txt', 'w').write(os.environ['DATABASE_URL'])\n"
+                         "http.server.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), http.server.SimpleHTTPRequestHandler).serve_forever()\n", "app")
+        cfg = ApplicationConfig(start_command=f'"{sys.executable}" app.py', database="postgres", health_timeout=15)
+        path = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+        with mock.patch.dict(os.environ, {"PATH": path, "FAKE_DOCKER_LOG": str(log)}):
+            em = EnvironmentManager(self.local_dir, cfg)
+            try:
+                env = em.launch_environment("HEAD", "proposed")
+                self.assertTrue(env.is_ready, env.startup_error)
+                self.assertRegex(env.database_url, r"^postgresql://proofpush:proofpush@127\.0\.0\.1:\d+/proofpush$")
+                self.assertEqual((env.worktree_path / "db.txt").read_text(), env.database_url)  # the app got it
+            finally:
+                em.cleanup()
+            calls = log.read_text()
+            self.assertIn("run -d --rm --name proofpush-proposed-", calls)
+            self.assertIn("postgres:16-alpine", calls)
+            self.assertIn("pg_isready", calls)
+            self.assertIn("rm -f proofpush-proposed-", calls)
+
+            with mock.patch.dict(os.environ, {"FAKE_DOCKER_DOWN": "1"}):
+                em = EnvironmentManager(self.local_dir, cfg)
+                env = em.launch_environment("HEAD", "baseline")
+                em.cleanup()
+                self.assertIn("Is Docker running?", env.startup_error)
+        with mock.patch("shutil.which", return_value=None):
+            em = EnvironmentManager(self.local_dir, cfg)
+            env = em.launch_environment("HEAD", "baseline")
+            em.cleanup()
+            self.assertIn("needs Docker or Podman", env.startup_error)
