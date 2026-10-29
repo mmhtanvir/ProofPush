@@ -10,7 +10,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
-from change_auditor.utils import run_command
+from proofpush.utils import run_command
 
 ZERO_SHA = "0000000000000000000000000000000000000000"
 
@@ -19,14 +19,14 @@ HOOK_TEMPLATE = """#!/usr/bin/env bash
 # Automatically installed by `proofpush install`
 
 # Prevent recursive invocation
-if [ "${PROOFPUSH_RUNNING}" = "1" ] || [ "${CHANGE_AUDITOR_RUNNING}" = "1" ]; then
+if [ "${PROOFPUSH_RUNNING}" = "1" ]; then
     exit 0
 fi
 
 # Detect if running via global core.hooksPath and repo is not configured for ProofPush
 GLOBAL_HOOKS=$(git config --global core.hooksPath 2>/dev/null || echo "")
 if [ -n "${GLOBAL_HOOKS}" ]; then
-    if [ ! -f ".proofpush.yml" ] && [ ! -f ".proofpush.yaml" ] && [ ! -f ".change-auditor.yml" ] && [ ! -f ".change-auditor.yaml" ] && [ ! -f ".proofpush-task.md" ] && [ ! -f ".change-auditor-task.md" ]; then
+    if [ ! -f ".proofpush.yml" ] && [ ! -f ".proofpush.yaml" ] && [ ! -f ".proofpush-task.md" ]; then
         exit 0
     fi
 fi
@@ -35,11 +35,7 @@ fi
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEGACY_HOOK="${HOOK_DIR}/pre-push.legacy"
 
-# Detect proofpush or change-auditor executable
 BIN_CMD="proofpush"
-if ! command -v proofpush >/dev/null 2>&1; then
-    BIN_CMD="change-auditor"
-fi
 
 if [ -f "${LEGACY_HOOK}" ] && [ -x "${LEGACY_HOOK}" ]; then
     STDIN_TEMP=$(mktemp)
@@ -128,7 +124,7 @@ class GitInterceptor:
 
         if hook_file.exists():
             content = hook_file.read_text(encoding="utf-8", errors="ignore")
-            if "proofpush" in content or "change-auditor" in content:
+            if "proofpush" in content:
                 # Update existing hook
                 hook_file.write_text(HOOK_TEMPLATE, encoding="utf-8")
                 hook_file.chmod(hook_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -173,8 +169,8 @@ class GitInterceptor:
             return {"success": True, "action": "not_installed"}
 
         content = hook_file.read_text(encoding="utf-8", errors="ignore")
-        if "proofpush" not in content and "change-auditor" not in content:
-            return {"success": False, "error": "pre-push hook is not managed by proofpush or change-auditor"}
+        if "proofpush" not in content:
+            return {"success": False, "error": "pre-push hook is not managed by proofpush"}
 
         hook_file.unlink()
         restored = False
@@ -209,7 +205,7 @@ class GitInterceptor:
 
         is_executable = os.access(hook_file, os.X_OK)
         content = hook_file.read_text(encoding="utf-8", errors="ignore")
-        is_managed = "proofpush" in content or "change-auditor" in content
+        is_managed = "proofpush" in content
 
         return {
             "installed": is_managed,

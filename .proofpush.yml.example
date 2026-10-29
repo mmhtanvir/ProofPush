@@ -14,7 +14,7 @@ audit_level: quick
 
 # Baseline strategy:
 # - merge-base: git merge base against remote ref or target branch (recommended)
-# - captured: compare against locally saved snapshot captured with `change-auditor baseline capture`
+# - captured: compare against locally saved snapshot captured with `proofpush baseline capture`
 # - commit: compare against explicit git revision
 # - latest-passed: compare against latest commit that successfully passed audit
 baseline:

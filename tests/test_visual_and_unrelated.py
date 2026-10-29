@@ -20,10 +20,10 @@ try:
     from tests.test_helpers import GitRepoTestCase
 except ImportError:
     from test_helpers import GitRepoTestCase
-from change_auditor.task_resolver import TaskResolver, TaskContext
-from change_auditor.unrelated_analyzer import UnrelatedAnalyzer
-from change_auditor.visual_comparator import VisualComparator
-from change_auditor.browser_engine import DESTRUCTIVE_KEYWORDS
+from proofpush.task_resolver import TaskResolver, TaskContext
+from proofpush.unrelated_analyzer import UnrelatedAnalyzer
+from proofpush.visual_comparator import VisualComparator
+from proofpush.browser_engine import DESTRUCTIVE_KEYWORDS
 
 
 class TestVisualAndUnrelated(GitRepoTestCase):

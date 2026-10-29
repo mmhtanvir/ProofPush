@@ -14,8 +14,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "proofpush=change_auditor.cli:main",
-            "change-auditor=change_auditor.cli:main",
+            "proofpush=proofpush.cli:main",
         ],
     },
 )

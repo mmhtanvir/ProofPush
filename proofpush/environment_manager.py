@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 import subprocess
 
-from change_auditor.config import ApplicationConfig, ServiceConfig
-from change_auditor.utils import find_free_port, is_port_open, run_command
+from proofpush.config import ApplicationConfig, ServiceConfig
+from proofpush.utils import find_free_port, is_port_open, run_command
 
 
 @dataclass
@@ -153,7 +153,7 @@ class EnvironmentManager:
         proc_env["AUDITOR_PORT"] = str(port)
         proc_env["BASE_URL"] = base_url
         proc_env["DATABASE_URL"] = f"sqlite:///{db_path}"
-        proc_env["CHANGE_AUDITOR_RUNNING"] = "1"
+        proc_env["PROOFPUSH_RUNNING"] = "1"
         if backend_port:
             proc_env["BACKEND_URL"] = f"http://127.0.0.1:{backend_port}"
             proc_env["API_URL"] = f"http://127.0.0.1:{backend_port}"

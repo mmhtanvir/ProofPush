@@ -10,8 +10,8 @@ import json
 import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional, List
-from change_auditor.config import AIConfig
-from change_auditor.utils import redact_secrets
+from proofpush.config import AIConfig
+from proofpush.utils import redact_secrets
 
 
 class BaseAIAdapter:

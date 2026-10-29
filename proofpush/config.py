@@ -1,6 +1,6 @@
 """
 Configuration management for ProofPush.
-Loads .proofpush.yml (or legacy .change-auditor.yml) or falls back to sane defaults.
+Loads .proofpush.yml / .proofpush.yaml or falls back to sane defaults.
 """
 
 from dataclasses import dataclass, field
@@ -116,15 +116,15 @@ class AuditorConfig:
 
 
 def find_config_file(repo_path: Path) -> Optional[Path]:
-    """Return the first config file present (.proofpush.yml preferred, legacy .change-auditor.yml accepted)."""
-    for name in (".proofpush.yml", ".proofpush.yaml", ".change-auditor.yml", ".change-auditor.yaml"):
+    """Return the first config file present (.proofpush.yml or .proofpush.yaml)."""
+    for name in (".proofpush.yml", ".proofpush.yaml"):
         if (repo_path / name).is_file():
             return repo_path / name
     return None
 
 
 def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
-    """Load configuration from .proofpush.yml or .change-auditor.yml in repo_path, or return default config."""
+    """Load configuration from .proofpush.yml in repo_path, or return default config."""
     config = AuditorConfig()
     if not repo_path:
         return config

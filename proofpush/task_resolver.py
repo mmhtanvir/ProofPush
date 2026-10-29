@@ -5,7 +5,7 @@ Resolves the intended task and expected behavior from:
 2. Supported AI agent metadata (Claude Code, Gemini CLI, Codex, Cursor)
 3. Agent session / prompt artifacts
 4. Commit messages
-5. Repository task file (.git/change-auditor-task.md or .change-auditor-task.md)
+5. Repository task file (.git/proofpush-task.md or .proofpush-task.md)
 6. Interactive developer prompt
 Includes protection against prompt injection in commit messages and task descriptions.
 """
@@ -66,7 +66,7 @@ class TaskResolver:
         """Resolve the task context following the strict priority order."""
 
         # Priority 1: Explicit CLI option or environment variable
-        env_task = os.environ.get("PROOFPUSH_TASK") or os.environ.get("CHANGE_AUDITOR_TASK")
+        env_task = os.environ.get("PROOFPUSH_TASK")
         task_str = explicit_task or env_task
         if task_str and task_str.strip():
             clean, injected = self.sanitize_input(task_str)
@@ -85,7 +85,7 @@ class TaskResolver:
         if agent_task:
             return agent_task
 
-        # Priority 3: Task Context File (.git/change-auditor-task.md or .change-auditor-task.md)
+        # Priority 3: Task Context File (.git/proofpush-task.md or .proofpush-task.md)
         file_task = self._read_task_file()
         if file_task:
             return file_task
@@ -175,9 +175,6 @@ class TaskResolver:
             self.repo_path / ".git" / "proofpush-task.md",
             self.repo_path / ".proofpush-task.md",
             self.repo_path / "proofpush-task.md",
-            self.repo_path / ".git" / "change-auditor-task.md",
-            self.repo_path / ".change-auditor-task.md",
-            self.repo_path / "change-auditor-task.md",
         ]
 
         task_file = None

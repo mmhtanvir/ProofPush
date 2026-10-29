@@ -18,5 +18,4 @@ dependencies = [
 ]
 
 [project.scripts]
-proofpush = "change_auditor.cli:main"
-change-auditor = "change_auditor.cli:main"
+proofpush = "proofpush.cli:main"

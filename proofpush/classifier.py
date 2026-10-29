@@ -7,9 +7,9 @@ evaluates findings against task context, and classifies outcomes into standard c
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
-from change_auditor.task_resolver import TaskContext
-from change_auditor.browser_engine import PageVisitResult, WorkflowExecutionResult
-from change_auditor.visual_comparator import VisualComparisonResult
+from proofpush.task_resolver import TaskContext
+from proofpush.browser_engine import PageVisitResult, WorkflowExecutionResult
+from proofpush.visual_comparator import VisualComparisonResult
 
 
 @dataclass

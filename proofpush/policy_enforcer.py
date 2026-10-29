@@ -8,9 +8,9 @@ import sys
 import webbrowser
 from dataclasses import dataclass
 from typing import Tuple, List, Optional
-from change_auditor.config import PoliciesConfig
-from change_auditor.classifier import Finding
-from change_auditor.unrelated_analyzer import SecurityAuditResult
+from proofpush.config import PoliciesConfig
+from proofpush.classifier import Finding
+from proofpush.unrelated_analyzer import SecurityAuditResult
 
 
 @dataclass

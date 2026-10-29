@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from change_auditor.utils import run_command
+from proofpush.utils import run_command
 
 
 class GitRepoTestCase(unittest.TestCase):
@@ -109,4 +109,4 @@ routes:
 visual:
   enabled: true
 """
-        self.commit_file(".change-auditor.yml", config_yaml, "Add .change-auditor.yml")
+        self.commit_file(".proofpush.yml", config_yaml, "Add .proofpush.yml")

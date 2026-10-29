@@ -21,13 +21,13 @@ try:
     from tests.test_helpers import GitRepoTestCase
 except ImportError:
     from test_helpers import GitRepoTestCase
-from change_auditor.config import PoliciesConfig, ApplicationConfig, AIConfig
-from change_auditor.policy_enforcer import PolicyEnforcer
-from change_auditor.classifier import Finding
-from change_auditor.baseline_manager import BaselineManager
-from change_auditor.ai_engine import get_ai_adapter, LocalRuleEngine
-from change_auditor.environment_manager import EnvironmentManager
-from change_auditor.unrelated_analyzer import SecurityAuditResult, SecretFinding
+from proofpush.config import PoliciesConfig, ApplicationConfig, AIConfig
+from proofpush.policy_enforcer import PolicyEnforcer
+from proofpush.classifier import Finding
+from proofpush.baseline_manager import BaselineManager
+from proofpush.ai_engine import get_ai_adapter, LocalRuleEngine
+from proofpush.environment_manager import EnvironmentManager
+from proofpush.unrelated_analyzer import SecurityAuditResult, SecretFinding
 
 
 class TestPoliciesAndEnvironments(GitRepoTestCase):
@@ -135,7 +135,7 @@ class TestPoliciesAndEnvironments(GitRepoTestCase):
 
     def test_scenario_26_unavailable_browser(self):
         """Scenario 26: Gracefully reports error if browser binary is missing or cannot launch."""
-        from change_auditor.browser_engine import BrowserEngine
+        from proofpush.browser_engine import BrowserEngine
         import asyncio
         # Point to an unreachable port
         be = BrowserEngine(timeout=1000)

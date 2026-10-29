@@ -18,10 +18,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from change_auditor.task_resolver import TaskContext
-from change_auditor.classifier import Finding
-from change_auditor.visual_comparator import VisualComparisonResult
-from change_auditor.unrelated_analyzer import SecurityAuditResult
+from proofpush.task_resolver import TaskContext
+from proofpush.classifier import Finding
+from proofpush.visual_comparator import VisualComparisonResult
+from proofpush.unrelated_analyzer import SecurityAuditResult
 
 
 @dataclass

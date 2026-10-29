@@ -16,20 +16,20 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from change_auditor.config import load_config, AuditorConfig
-from change_auditor.git_interceptor import GitInterceptor, PushRefUpdate
-from change_auditor.task_resolver import TaskResolver, TaskContext
-from change_auditor.baseline_manager import BaselineManager, BaselineMetadata
-from change_auditor.environment_manager import EnvironmentManager
-from change_auditor.route_discoverer import RouteDiscoverer
-from change_auditor.browser_engine import BrowserEngine
-from change_auditor.visual_comparator import VisualComparator
-from change_auditor.unrelated_analyzer import UnrelatedAnalyzer
-from change_auditor.classifier import RegressionClassifier, Finding
-from change_auditor.ai_engine import get_ai_adapter
-from change_auditor.reporter import ReportGenerator, AuditReportData
-from change_auditor.policy_enforcer import PolicyEnforcer
-from change_auditor.doctor import Doctor
+from proofpush.config import load_config, AuditorConfig
+from proofpush.git_interceptor import GitInterceptor, PushRefUpdate
+from proofpush.task_resolver import TaskResolver, TaskContext
+from proofpush.baseline_manager import BaselineManager, BaselineMetadata
+from proofpush.environment_manager import EnvironmentManager
+from proofpush.route_discoverer import RouteDiscoverer
+from proofpush.browser_engine import BrowserEngine
+from proofpush.visual_comparator import VisualComparator
+from proofpush.unrelated_analyzer import UnrelatedAnalyzer
+from proofpush.classifier import RegressionClassifier, Finding
+from proofpush.ai_engine import get_ai_adapter
+from proofpush.reporter import ReportGenerator, AuditReportData
+from proofpush.policy_enforcer import PolicyEnforcer
+from proofpush.doctor import Doctor
 
 
 console = Console()

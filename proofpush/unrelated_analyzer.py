@@ -9,8 +9,8 @@ import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-from change_auditor.task_resolver import TaskContext
-from change_auditor.utils import run_command, SECRET_PATTERNS
+from proofpush.task_resolver import TaskContext
+from proofpush.utils import run_command, SECRET_PATTERNS
 
 
 @dataclass

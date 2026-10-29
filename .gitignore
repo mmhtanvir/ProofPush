@@ -5,6 +5,5 @@ __pycache__/
 dist/
 build/
 .proofpush/
-.change-auditor/
 .auditor_env_*
 .DS_Store

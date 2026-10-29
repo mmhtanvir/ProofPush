@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set
 from playwright.async_api import async_playwright, Browser, Page, Response, Request
 
-from change_auditor.config import WorkflowConfig, WorkflowStep
+from proofpush.config import WorkflowConfig, WorkflowStep
 
 DESTRUCTIVE_KEYWORDS = [
     "delete", "remove", "destroy", "drop", "purge", "truncate", "terminate",

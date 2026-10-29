@@ -23,8 +23,8 @@ try:
     from tests.test_helpers import GitRepoTestCase
 except ImportError:
     from test_helpers import GitRepoTestCase
-from change_auditor.git_interceptor import GitInterceptor
-from change_auditor.utils import run_command
+from proofpush.git_interceptor import GitInterceptor
+from proofpush.utils import run_command
 
 
 class TestGitAndHooks(GitRepoTestCase):
@@ -47,9 +47,9 @@ class TestGitAndHooks(GitRepoTestCase):
         self.assertTrue(backup.exists())
         self.assertIn("Running existing test hook", backup.read_text(encoding="utf-8"))
 
-        # Verify new hook is change-auditor
+        # Verify new hook is proofpush
         new_hook_content = (hooks_dir / "pre-push").read_text(encoding="utf-8")
-        self.assertIn("change-auditor", new_hook_content)
+        self.assertIn("proofpush", new_hook_content)
 
         # Test uninstall restores legacy
         unres = interceptor.uninstall_hook()

@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from change_auditor.config import BaselineConfig
-from change_auditor.utils import get_repo_identifier, run_command, sanitize_dict_secrets
+from proofpush.config import BaselineConfig
+from proofpush.utils import get_repo_identifier, run_command, sanitize_dict_secrets
 
 
 @dataclass
@@ -34,9 +34,7 @@ class BaselineManager:
     def __init__(self, repo_path: Path):
         self.repo_path = repo_path.resolve()
         self.repo_id = get_repo_identifier(self.repo_path)
-        legacy_dir = Path.home() / ".change-auditor" / "baselines" / self.repo_id
-        # Keep using baselines captured before the ProofPush rename
-        self.storage_dir = legacy_dir if legacy_dir.is_dir() else Path.home() / ".proofpush" / "baselines" / self.repo_id
+        self.storage_dir = Path.home() / ".proofpush" / "baselines" / self.repo_id
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
     def resolve_baseline_sha(

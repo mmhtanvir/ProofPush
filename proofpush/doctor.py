@@ -7,10 +7,10 @@ import sys
 import shutil
 from pathlib import Path
 from typing import List, Dict, Any
-from change_auditor.utils import run_command
-from change_auditor.git_interceptor import GitInterceptor
-from change_auditor.config import load_config, find_config_file
-from change_auditor.baseline_manager import BaselineManager
+from proofpush.utils import run_command
+from proofpush.git_interceptor import GitInterceptor
+from proofpush.config import load_config, find_config_file
+from proofpush.baseline_manager import BaselineManager
 
 
 class Doctor:

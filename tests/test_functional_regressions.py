@@ -13,9 +13,9 @@ Covers:
 """
 
 import unittest
-from change_auditor.task_resolver import TaskContext
-from change_auditor.classifier import RegressionClassifier
-from change_auditor.browser_engine import PageVisitResult, WorkflowExecutionResult, NetworkFailure
+from proofpush.task_resolver import TaskContext
+from proofpush.classifier import RegressionClassifier
+from proofpush.browser_engine import PageVisitResult, WorkflowExecutionResult, NetworkFailure
 
 
 class TestFunctionalRegressions(unittest.TestCase):
