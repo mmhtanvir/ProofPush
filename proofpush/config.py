@@ -89,9 +89,8 @@ class SecurityConfig:
 
 @dataclass
 class AIConfig:
-    provider: str = "local"  # local, openai, anthropic
+    provider: str = "local"  # local, openai
     model: Optional[str] = None
-    redact_before_send: bool = True
 
 
 @dataclass
@@ -225,7 +224,6 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
         ai = raw["ai"]
         config.ai.provider = ai.get("provider", config.ai.provider)
         config.ai.model = ai.get("model", config.ai.model)
-        config.ai.redact_before_send = ai.get("redact_before_send", config.ai.redact_before_send)
 
     if "policies" in raw and isinstance(raw["policies"], dict):
         p = raw["policies"]

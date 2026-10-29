@@ -503,8 +503,11 @@ def test():
     """Run the auditor's automated test suite."""
     console.print("[bold]Running automated test suite...[/bold]")
     import subprocess
-    pkg_dir = Path(__file__).resolve().parent.parent
-    cmd = [sys.executable, "-m", "unittest", "discover", "-s", str(pkg_dir / "tests"), "-p", "test_*.py"]
+    tests_dir = Path(__file__).resolve().parent.parent / "tests"
+    if not tests_dir.is_dir():
+        console.print("[yellow]Test suite is not bundled with installed packages. Run `proofpush test` from a source checkout (pip install -e .).[/yellow]")
+        sys.exit(1)
+    cmd = [sys.executable, "-m", "unittest", "discover", "-s", str(tests_dir), "-p", "test_*.py"]
     res = subprocess.run(cmd)
     sys.exit(res.returncode)
 

@@ -81,10 +81,10 @@ security:
   fail_on_unrelated: false
 
 # AI assistance (optional, 100% works locally without external AI)
+# Secrets are always redacted before anything is sent to a remote provider.
 ai:
-  provider: local # local, openai, anthropic
-  model: gpt-4o-mini
-  redact_before_send: true
+  provider: local # local, or openai (needs OPENAI_API_KEY)
+  # model: gpt-4o-mini # openai only
 
 # Enforcement policies
 policies:

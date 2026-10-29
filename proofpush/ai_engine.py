@@ -1,7 +1,7 @@
 """
 Modular AI Engine.
 Supports local deterministic analysis (default, offline, zero-network),
-with optional plug-in adapters for OpenAI and Anthropic APIs.
+with an optional OpenAI adapter.
 Enforces secret redaction and disclosures before sending data.
 """
 
@@ -101,5 +101,9 @@ def get_ai_adapter(config: AIConfig) -> BaseAIAdapter:
     """Factory to get configured AI adapter."""
     if config.provider == "openai" and os.environ.get("OPENAI_API_KEY"):
         return OpenAIAdapter(model=config.model or "gpt-4o-mini")
+    if config.provider == "openai":
+        print("Warning: ai.provider is 'openai' but OPENAI_API_KEY is not set; using local engine.")
+    elif config.provider != "local":
+        print(f"Warning: unknown ai.provider '{config.provider}' (supported: local, openai); using local engine.")
     # Default to deterministic local engine
     return LocalRuleEngine()
