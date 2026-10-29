@@ -6,6 +6,7 @@ Loads .proofpush.yml / .proofpush.yaml or falls back to sane defaults.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -139,6 +140,17 @@ class PushRulesConfig:
 
 
 @dataclass
+class InteractionsConfig:
+    # Click every safe button/toggle/tab on each checked page in both versions and compare what happens.
+    # Opt-in: a local app may talk to a real backend, and a click can change data there.
+    auto_click: bool = False
+    max_per_page: int = 8
+    max_pages: int = 10  # pages whose buttons get clicked per audit (each click takes ~0.5-1 s per version)
+    allow_on_live: bool = False  # also click on live sites (`check`, `gate --base-url`)
+    skip: List[str] = field(default_factory=list)  # extra words that mark a button as unsafe to click
+
+
+@dataclass
 class NotifyConfig:
     desktop: bool = True  # OS notification when nobody is watching a terminal (GUI/agent pushes, scheduled checks)
     webhook_env: str = ""  # name of the env var / secrets.env key holding a Slack, Discord or generic webhook URL
@@ -160,6 +172,7 @@ class AuditorConfig:
     auth: Optional[AuthConfig] = None
     environments: Dict[str, str] = field(default_factory=dict)  # name -> live base URL, e.g. prod
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    interactions: InteractionsConfig = field(default_factory=InteractionsConfig)
     report_retention: int = 30
 
 
@@ -186,7 +199,7 @@ def secret_value(repo_path: Path, name: str) -> Optional[str]:
     if not secrets_file.is_file():
         return None
     exclude_from_git(repo_path)
-    if secrets_file.stat().st_mode & 0o077:
+    if sys.platform != "win32" and secrets_file.stat().st_mode & 0o077:
         secrets_file.chmod(0o600)  # holds passwords and webhook URLs: owner-only
     for line in secrets_file.read_text(encoding="utf-8").splitlines():
         key, sep, value = line.strip().partition("=")
@@ -347,6 +360,14 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
             name: (env.get("url", "") if isinstance(env, dict) else str(env))
             for name, env in raw["environments"].items()
         }
+
+    if isinstance(raw.get("interactions"), dict):
+        i = raw["interactions"]
+        config.interactions = InteractionsConfig(
+            auto_click=bool(i.get("auto_click", False)), max_per_page=int(i.get("max_per_page", 8)),
+            max_pages=int(i.get("max_pages", 10)),
+            allow_on_live=bool(i.get("allow_on_live", False)), skip=[str(w) for w in i.get("skip") or []],
+        )
 
     if isinstance(raw.get("notify"), dict):
         n = raw["notify"]

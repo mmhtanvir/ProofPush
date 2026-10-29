@@ -92,7 +92,8 @@ class TestAuth(GitRepoTestCase):
         engine = BrowserEngine()
         asyncio.run(engine.save_session_interactively(page.as_uri(), out, lambda: typed.append("enter"), headless=True))
         self.assertEqual(typed, ["enter"])
-        self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
+        if sys.platform != "win32":
+            self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
         self.assertIn("cookies", json.loads(out.read_text()))
 
         out.write_text(json.dumps({

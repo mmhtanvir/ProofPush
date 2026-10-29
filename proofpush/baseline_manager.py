@@ -10,6 +10,7 @@ import os
 import json
 from datetime import datetime
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -107,7 +108,8 @@ class BaselineManager:
 
     def save_baseline(self, metadata: BaselineMetadata, update_latest: bool = True) -> Path:
         """Save baseline metadata and artifacts."""
-        filename = f"baseline_{metadata.git_revision[:10]}_{time.time_ns()}.json"  # ns: same-second saves don't collide
+        # ns + random: same-second (and, on Windows' coarse clock, same-tick) saves don't collide
+        filename = f"baseline_{metadata.git_revision[:10]}_{time.time_ns()}_{uuid.uuid4().hex[:6]}.json"
         dest = self.storage_dir / filename
 
         # Ensure environment secrets are NEVER saved

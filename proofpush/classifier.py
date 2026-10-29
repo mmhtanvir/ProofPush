@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from proofpush.task_resolver import TaskContext
-from proofpush.browser_engine import PageVisitResult, WorkflowExecutionResult
+from proofpush.browser_engine import InteractionResult, PageVisitResult, WorkflowExecutionResult
 from proofpush.visual_comparator import VisualComparisonResult
 
 
@@ -182,6 +182,52 @@ class RegressionClassifier:
             is_critical=False,
         )
 
+    def classify_interaction(self, route: str, base: Optional[InteractionResult],
+                             prop: Optional[InteractionResult]) -> Optional[Finding]:
+        """Compare one element's click behaviour between versions. None when nothing worth reporting changed."""
+        if not base or base.error or not base.had_effect:
+            return None  # new element, or one that did nothing before either
+        label = base.label
+        problems, category, critical = [], "POSSIBLE_REGRESSION", False
+        if prop is None:
+            problems.append(f"'{label}' is no longer on the page")
+            category = "REMOVED_FUNCTIONALITY"
+        elif prop.error or not prop.clicked:
+            problems.append(f"'{label}' can't be clicked anymore ({prop.error})")
+            category, critical = "REGRESSION", True
+        elif not prop.had_effect:
+            problems.append(f"'{label}' stopped working: clicking it no longer changes anything")
+            category, critical = "REGRESSION", True
+        else:
+            new_errors = [e for e in prop.console_errors if e not in base.console_errors]
+            if new_errors:
+                problems.append(f"'{label}' now throws errors when clicked: {new_errors[0][:120]}")
+                category, critical = "REGRESSION", True
+            for name, before, after, extra in (("responds", base.response_ms, prop.response_ms, 300),
+                                               ("finishes updating", base.settle_ms, prop.settle_ms, 500)):
+                if before is not None and after is not None and after > max(2 * before, before + extra):
+                    problems.append(f"'{label}' {name} slower: {before:.0f} ms -> {after:.0f} ms")
+                    break  # one timing line is enough
+            if prop.blocking_ms - base.blocking_ms > 200:
+                problems.append(f"'{label}' freezes the page: main thread blocked {base.blocking_ms:.0f} ms -> {prop.blocking_ms:.0f} ms")
+            if prop.layout_shift > 0.1 and prop.layout_shift - base.layout_shift > 0.05:
+                problems.append(f"'{label}' makes the layout jump (shift {base.layout_shift} -> {prop.layout_shift})")
+        if not problems:
+            return None
+        return Finding(
+            category=category,
+            target=f"{route} -> {label}",
+            before_behavior=f"Worked: {_effect(base)}",
+            after_behavior="; ".join(problems),
+            expected_behavior="Buttons that worked keep working, just as fast",
+            actual_result=problems[0],
+            confidence=0.85,
+            recommended_action=f"Click '{label}' on {route} in the new version and compare with the live one.",
+            is_critical=critical,
+            console_errors=prop.console_errors if prop else [],
+            reproduction_steps=[f"Open {route}", f"Click '{label}'"],
+        )
+
     def classify_workflow(
         self,
         base_wf: Optional[WorkflowExecutionResult],
@@ -268,3 +314,14 @@ class RegressionClassifier:
                 console_errors=prop_wf.console_errors,
                 reproduction_steps=[f"Execute workflow '{prop_wf.workflow_name}'"],
             )
+
+
+def _effect(r) -> str:
+    parts = []
+    if r.url_changed:
+        parts.append("navigated")
+    if r.mutations:
+        parts.append(f"page updated in {r.response_ms} ms")
+    if r.requests:
+        parts.append(f"{r.requests} request(s)")
+    return ", ".join(parts) or "no effect"

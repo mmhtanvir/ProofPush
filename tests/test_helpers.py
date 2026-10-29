@@ -19,9 +19,15 @@ class GitRepoTestCase(unittest.TestCase):
 
         # Sandbox HOME so baselines (~/.proofpush) and global git config stay out of the real home,
         # including for hook subprocesses; keep Playwright pointed at the real browser cache.
-        cache = "Library/Caches" if sys.platform == "darwin" else ".cache"
-        browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(Path.home() / cache / "ms-playwright")
-        env_patch = mock.patch.dict(os.environ, {"HOME": str(self.test_dir / "home"), "PLAYWRIGHT_BROWSERS_PATH": browsers})
+        if sys.platform == "win32":
+            default_cache = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "ms-playwright"
+        elif sys.platform == "darwin":
+            default_cache = Path.home() / "Library" / "Caches" / "ms-playwright"
+        else:
+            default_cache = Path.home() / ".cache" / "ms-playwright"
+        browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(default_cache)
+        sandbox = str(self.test_dir / "home")
+        env_patch = mock.patch.dict(os.environ, {"HOME": sandbox, "USERPROFILE": sandbox, "PLAYWRIGHT_BROWSERS_PATH": browsers})
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.remote_dir = self.test_dir / "remote.git"

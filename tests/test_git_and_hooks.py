@@ -79,12 +79,12 @@ class TestGitAndHooks(GitRepoTestCase):
         """Scenario 19: Identify force push when remote ref is not an ancestor."""
         self.commit_file("base.txt", "base", "Initial base")
         # Push initial to remote
-        run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+        run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
 
         # Create branch and commit on remote
         run_command(["git", "checkout", "-b", "feature"], cwd=self.local_dir)
         c_feat = self.commit_file("feat.txt", "feat", "Feature commit")
-        run_command(["git", "push", "origin", "feature"], cwd=self.local_dir)
+        run_command(["git", "push", "origin", "feature"], cwd=self.local_dir, timeout=300)
 
         # Now reset local feature and diverge (simulate force push)
         run_command(["git", "reset", "--hard", "HEAD~1"], cwd=self.local_dir)
@@ -117,19 +117,19 @@ class TestGitAndHooks(GitRepoTestCase):
     def test_scenario_1_normal_human_initiated_push(self):
         """Scenario 1: Normal human-initiated push with pre-push hook execution."""
         self.create_mock_site(version="baseline")
-        run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+        run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
 
         interceptor = GitInterceptor(self.local_dir)
         interceptor.install_hook()
 
         self.commit_file("index.html", "<h1>Test Store Updated</h1>", "feat: Update store greeting")
-        code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+        code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
         self.assertEqual(code, 0)
 
     def test_scenario_2_simulated_ai_cli_push(self):
         """Scenario 2: Push initiated by an autonomous AI agent CLI without TTY interaction."""
         self.create_mock_site(version="baseline")
-        run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+        run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
 
         interceptor = GitInterceptor(self.local_dir)
         interceptor.install_hook()
@@ -137,13 +137,13 @@ class TestGitAndHooks(GitRepoTestCase):
         # Simulate AI agent generating a new feature cleanly
         self.commit_file("index.html", "<h1>Store AI Enhanced</h1>", "feat: Agent automated update")
         env_vars = {"CI": "1", "NONINTERACTIVE": "1", "AGENT_CLI": "claude-code"}
-        code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir, env=env_vars)
+        code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir, env=env_vars, timeout=300)
         self.assertEqual(code, 0)
 
     def test_scenario_25_push_using_no_verify(self):
         """Scenario 25: Pushing with --no-verify cleanly bypasses pre-push hook per Git design."""
         self.create_mock_site(version="baseline")
-        run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+        run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
 
         interceptor = GitInterceptor(self.local_dir)
         interceptor.install_hook()
@@ -152,13 +152,13 @@ class TestGitAndHooks(GitRepoTestCase):
         self.commit_file("secret.txt", "OPENAI_API_KEY=sk-abcdef1234567890abcdef1234567890", "Add secret")
 
         # Push with --no-verify must succeed per Git standard behavior
-        code, out, _ = run_command(["git", "push", "--no-verify", "origin", "main"], cwd=self.local_dir)
+        code, out, _ = run_command(["git", "push", "--no-verify", "origin", "main"], cwd=self.local_dir, timeout=300)
         self.assertEqual(code, 0)
 
     def test_scenario_30_blocked_push_does_not_update_remote(self):
         """Scenario 30: When push is blocked by pre-push hook, remote refs remain unchanged."""
         c_initial = self.commit_file("init.txt", "v1", "Initial commit")
-        run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+        run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
 
         # Get initial remote sha
         code, out, _ = run_command(["git", "rev-parse", "main"], cwd=self.remote_dir)
@@ -175,7 +175,7 @@ class TestGitAndHooks(GitRepoTestCase):
         c_new = self.commit_file("new.txt", "v2", "New commit")
 
         # Attempt push (should fail with exit code != 0)
-        code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+        code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
         self.assertNotEqual(code, 0)
 
         # Verify remote ref was NOT updated

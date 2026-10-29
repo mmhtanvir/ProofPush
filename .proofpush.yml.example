@@ -131,3 +131,9 @@ report_retention: 30
 # notify:
 #   desktop: true            # OS notification when nobody is at a terminal (GUI / AI agent pushes)
 #   webhook_env: TEAM_WEBHOOK  # Slack / Discord / generic webhook URL, kept in .proofpush/secrets.env
+
+# Click safe buttons in both versions: catch ones that stop working, slow down, get janky or vanish (opt-in)
+# interactions:
+#   auto_click: true
+#   max_per_page: 8
+#   max_pages: 10

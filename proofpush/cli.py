@@ -208,6 +208,21 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     sys.exit(max(codes))
 
 
+async def _compare_clicks(engine, classifier, cfg, route, before_url, after_url, viewport) -> List[Finding]:
+    """Click the same safe elements on both versions of a page; report ones that broke, vanished, slowed or got janky."""
+    opts = cfg.interactions
+    before, after = await asyncio.gather(
+        engine.probe_interactions(before_url, route, opts.max_per_page, viewport, opts.skip),
+        engine.probe_interactions(after_url, route, opts.max_per_page, viewport, opts.skip),
+    )
+    # Elements gone from the new version's candidate list may still exist (e.g. now disabled): probe them directly
+    missing = [before[k] for k in before if k not in after]
+    if missing:
+        after.update(await engine.probe_interactions(after_url, route, viewport=viewport, only=missing))
+    found = [classifier.classify_interaction(route, before[k], after.get(k)) for k in before]
+    return [f for f in found if f]
+
+
 def _have_commit(repo_path: Path, sha: str) -> bool:
     return run_command(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo_path)[0] == 0
 
@@ -305,6 +320,9 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
             for route in list(dict.fromkeys([*live, *cand]))[: cfg.routes.max_pages]:
                 pages += 1
                 findings.append(classifier.classify_route_visit(route, live.get(route), cand.get(route)))
+                both_load = route in live and route in cand and live[route].status < 400 and cand[route].status < 400
+                if cfg.interactions.auto_click and cfg.interactions.allow_on_live and both_load and pages <= cfg.interactions.max_pages:
+                    findings.extend(await _compare_clicks(engine, classifier, cfg, route, base_url, candidate_url, None))
             for wf in cfg.workflows:
                 if wf.prod:
                     findings.append(classifier.classify_workflow(await engine.execute_workflow(base_url, wf),
@@ -653,6 +671,7 @@ def _audit_update(
                         visual_results.append(result)
                         return result
 
+                    clicked_pages = 0
                     # Audit routes
                     for r in routes:
                         routes_checked_count += 1
@@ -662,6 +681,11 @@ def _audit_update(
                             route=r, base_result=base_visit, prop_result=prop_visit,
                             visual_result=compare(r, base_visit, prop_visit, first),
                         ))
+                        if (cfg.interactions.auto_click and clicked_pages < cfg.interactions.max_pages
+                                and base_visit.status < 400 and prop_visit.status < 400):
+                            clicked_pages += 1
+                            findings.extend(await _compare_clicks(browser_engine, classifier, cfg, r,
+                                                                  base_url_b, base_url_p, size(first)))
                         # Other viewports (full audits): layout only, e.g. a nav pushed offscreen on mobile
                         for vp in viewports[1:]:
                             before, after = await visit(base_url_b, r, vp), await visit(base_url_p, r, vp)

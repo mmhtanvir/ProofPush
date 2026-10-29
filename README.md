@@ -207,6 +207,32 @@ Use a dedicated low-privilege test account in prod, never an admin.
 
 ---
 
+## 🖱️ Buttons That Stop Working, Slow Down or Get Glitchy
+
+Turn on `interactions.auto_click` and, on every checked page, ProofPush clicks each safe button, toggle, tab and menu in **both** versions and compares what happened:
+
+| Finding | Example |
+|---|---|
+| Stopped working | `'Star' stopped working: clicking it no longer changes anything` |
+| Can't be clicked | now disabled, hidden, or covered by another element |
+| Errors | `'Save filter' now throws errors when clicked: TypeError ...` |
+| Slower | `'Load more' responds slower: 22 ms -> 908 ms` |
+| Glitchy | `'Load more' freezes the page: main thread blocked 0 ms -> 851 ms`, or the layout jumps |
+| Missing | `'Filters' is no longer on the page` |
+
+```yaml
+interactions:
+  auto_click: true
+  max_per_page: 8      # buttons per page
+  max_pages: 10        # pages per audit
+  skip: [approve, sync]  # extra words that mark a button as unsafe
+  # allow_on_live: true  # also click on live sites (`check`, `gate --base-url`): only with a test account whose data can change
+```
+
+Safety: it never clicks anything that sounds destructive or data-changing (delete, pay, send, save, submit, approve, invite, logout, ...) or a form's submit button, and it clicks toggles (star, like, switch, menu) a second time to put them back. It is **opt-in** because a local copy of your app may talk to a real backend. Timing findings use generous margins (2x and +300 ms) so normal jitter doesn't trigger them.
+
+---
+
 ## 🚨 Suspicious Push Rules
 
 Every push is also checked against **103 rules** for supply-chain and tampering patterns, ported from [Pushguard](https://github.com/saadiqayyum/pushguard)'s catalog (MIT, see `proofpush/PUSHGUARD_LICENSE`). They run locally from git alone, so they work in any repo, including unconfigured ones under `install --global`.
@@ -380,7 +406,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 58-scenario test suite |
+| `proofpush test` | Runs the built-in 60-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -396,11 +422,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 58 real-world developer scenarios:
+ProofPush is tested against 60 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 58 tests in 17s (OK)
+# Ran 60 tests in 25s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

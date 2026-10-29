@@ -121,7 +121,7 @@ class Doctor:
 
         # 9. secrets.env must not be readable by other users
         secrets_env = self.repo_path / ".proofpush" / "secrets.env"
-        if secrets_env.is_file():
+        if secrets_env.is_file() and sys.platform != "win32":  # Windows has no Unix permission bits
             loose = secrets_env.stat().st_mode & 0o077
             checks.append({"name": "Secrets File", "passed": not loose,
                            "detail": "readable only by you" if not loose else f"readable by others: run `chmod 600 {secrets_env}`"})

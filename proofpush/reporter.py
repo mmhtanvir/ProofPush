@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -144,7 +145,7 @@ class ReportGenerator:
     def save_reports(self, data: AuditReportData) -> Dict[str, str]:
         """Save Markdown, JSON, and HTML evidence reports."""
         # Nanoseconds: several pushed branches can be audited within one second
-        base_name = f"report_{time.time_ns()}"
+        base_name = f"report_{time.time_ns()}_{uuid.uuid4().hex[:6]}"
 
         json_file = self.reports_dir / f"{base_name}.json"
         md_file = self.reports_dir / f"{base_name}.md"

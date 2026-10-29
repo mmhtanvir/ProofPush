@@ -116,6 +116,65 @@ class WorkflowExecutionResult:
     step_details: List[Dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass
+class InteractionResult:
+    """What one click did: used to spot buttons that stop working, slow down, or become janky."""
+    key: str  # stable identity across versions: data-testid, id, or role + label
+    label: str
+    clicked: bool = True
+    error: Optional[str] = None
+    url_changed: bool = False
+    mutations: int = 0
+    requests: int = 0
+    response_ms: Optional[float] = None  # click -> first visible change
+    settle_ms: Optional[float] = None  # click -> no more DOM changes for 300 ms
+    blocking_ms: float = 0.0  # main-thread long-task time beyond 50 ms each (jank)
+    layout_shift: float = 0.0
+    console_errors: List[str] = field(default_factory=list)
+    locator: Dict[str, Any] = field(default_factory=dict)  # how to find it again (testid / id / role + label)
+
+    @property
+    def had_effect(self) -> bool:
+        return self.url_changed or self.mutations > 0 or self.requests > 0
+
+
+# Elements a crawler may click: visible, enabled, not submit buttons, nothing that sounds destructive
+_CANDIDATES_JS = r"""([limit, extraSkip]) => {
+  const unsafe = new RegExp([
+    'delete|remove|destroy|drop|purge|truncate|terminate|wipe|reset|archive|ban|block',
+    'pay|checkout|charge|purchase|order|refund|transfer|subscribe|upgrade|downgrade|book',
+    'send|submit|save|confirm|approve|accept|reject|decline|invite|share|publish|deploy|upload|import|export|sync',
+    'logout|log out|sign ?out|deactivate',
+  ].join('|') + (extraSkip ? '|' + extraSkip : ''), 'i');
+  const els = [...document.querySelectorAll('button, [role=button], [role=tab], [role=switch], [role=checkbox], [role=menuitem], summary, input[type=checkbox]')];
+  const seen = new Set(), out = [];
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height || el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+    if (el.closest('form') && el.type === 'submit') continue;  // a plain <button> reports type 'submit' too; only forms submit
+    const label = (el.getAttribute('aria-label') || el.innerText || el.value || el.title || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    const testid = el.getAttribute('data-testid'), id = el.id;
+    if (unsafe.test([label, testid, id, el.className].join(' '))) continue;
+    const role = el.getAttribute('role') || (el.tagName === 'INPUT' ? 'checkbox' : el.tagName === 'SUMMARY' ? 'summary' : 'button');
+    const key = testid ? `testid:${testid}` : id ? `id:${id}` : label ? `${role}:${label}` : null;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({key, label: label || key, testid, id, role});
+    if (out.length >= limit) break;
+  }
+  return out;
+}"""
+
+# Installed before each click: counts DOM changes, long tasks and layout shifts from that moment on
+_MEASURE_JS = r"""() => {
+  const m = window.__pp = {start: performance.now(), mutations: 0, first: null, last: null, blocking: 0, shift: 0};
+  new MutationObserver(list => { const t = performance.now(); m.mutations += list.length; if (m.first === null) m.first = t; m.last = t; })
+    .observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+  try { new PerformanceObserver(l => l.getEntries().forEach(e => { if (e.startTime >= m.start) m.blocking += Math.max(0, e.duration - 50); })).observe({type: 'longtask', buffered: true}); } catch (e) {}
+  try { new PerformanceObserver(l => l.getEntries().forEach(e => { if (!e.hadRecentInput && e.startTime >= m.start) m.shift += e.value; })).observe({type: 'layout-shift', buffered: true}); } catch (e) {}
+}"""
+
+
 class BrowserEngine:
     def __init__(self, headless: bool = True, timeout: int = 15000):
         self.headless = headless
@@ -132,7 +191,12 @@ class BrowserEngine:
         loop = asyncio.get_running_loop()
         if self._browser is None or self._loop is not loop or not self._browser.is_connected():
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=self.headless)
+            try:
+                self._browser = await self._playwright.chromium.launch(headless=self.headless)
+            except Exception:
+                await self._playwright.stop()  # otherwise the driver process outlives the event loop
+                self._playwright = None
+                raise
             self._loop = loop
         yield self._browser
 
@@ -460,6 +524,119 @@ class BrowserEngine:
             visits.append(visit)
             queue += [link for link in visit.discovered_links if link not in seen]
         return visits
+
+    def _locator(self, page, c: Dict[str, Any]):
+        if c.get("testid"):
+            return page.locator(f'[data-testid="{c["testid"]}"]').first
+        if c.get("id"):
+            return page.locator(f'[id="{c["id"]}"]').first
+        if c["role"] in ("summary",):
+            return page.locator("summary", has_text=c["label"]).first
+        return page.get_by_role(c["role"], name=c["label"], exact=True).first
+
+    async def probe_interactions(self, base_url: str, route: str, max_elements: int = 8,
+                                 viewport: Optional[Dict[str, int]] = None, skip: Optional[List[str]] = None,
+                                 only: Optional[List["InteractionResult"]] = None) -> Dict[str, InteractionResult]:
+        """Click each safe interactive element on a page and measure what it does.
+
+        One page per call: after each click the element is clicked again to put state back (star, menu, tab),
+        and the page is reloaded only when a click navigated away. `only` probes specific elements (by locator)
+        seen in the other version; ones not on this page are left out.
+        """
+        url = f"{base_url.rstrip('/')}{route}"
+        results: Dict[str, InteractionResult] = {}
+        async with self._shared_browser() as browser:
+            context = await browser.new_context(viewport=viewport or {"width": 1280, "height": 800}, ignore_https_errors=True,
+                                                user_agent="proofpush-functional-agent", storage_state=self.sessions.get(base_url))
+            try:
+                page = await context.new_page()
+                await self._load_quiet(page, url)
+                if only is None:
+                    extra = "|".join(re.escape(w) for w in skip or [])
+                    candidates = await page.evaluate(_CANDIDATES_JS, [max_elements, extra])
+                else:
+                    candidates = [w.locator for w in only]
+                for c in candidates:
+                    if page.url != url:
+                        await self._load_quiet(page, url)
+                    res = await self._probe_one(page, c)
+                    if not (only is not None and res.error == "element not found"):
+                        results[c["key"]] = res
+            finally:
+                await context.close()
+        return results
+
+    async def _load_quiet(self, page, url: str) -> None:
+        await page.goto(url, timeout=self.timeout, wait_until="domcontentloaded")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+
+    async def _wait_quiet(self, page, before_url: str) -> None:
+        """Until the DOM has been quiet for 300 ms, nothing changed for 800 ms, or the page navigated (max 3 s)."""
+        for _ in range(30):
+            await page.wait_for_timeout(100)
+            if page.url != before_url:
+                return
+            m, now = await page.evaluate("() => [window.__pp, performance.now()]")
+            if (m["last"] is None and now - m["start"] > 800) or (m["last"] is not None and now - m["last"] > 300):
+                return
+
+    async def _probe_one(self, page, c: Dict[str, Any]) -> InteractionResult:
+        res = InteractionResult(key=c["key"], label=c["label"], locator=c)
+        requests: List[str] = []
+
+        def on_request(r):
+            if r.resource_type in ("xhr", "fetch", "document"):
+                requests.append(r.url)
+
+        def on_console(m):
+            if m.type == "error":
+                res.console_errors.append(m.text)
+
+        def on_error(e):
+            res.console_errors.append(str(e))
+
+        try:
+            target = self._locator(page, c)
+            if await target.count() == 0:
+                res.clicked, res.error = False, "element not found"
+                return res
+            page.on("request", on_request)
+            page.on("console", on_console)
+            page.on("pageerror", on_error)
+            await page.evaluate(_MEASURE_JS)
+            before_url = page.url
+            await target.click(timeout=3000)
+            await self._wait_quiet(page, before_url)
+            res.url_changed = page.url != before_url
+            res.requests = len(requests)
+            if not res.url_changed:
+                m = await page.evaluate("() => window.__pp")
+                res.mutations = m["mutations"]
+                res.response_ms = round(m["first"] - m["start"]) if m["first"] is not None else None
+                res.settle_ms = round(m["last"] - m["start"]) if m["last"] is not None else None
+                res.blocking_ms = round(m["blocking"])
+                res.layout_shift = round(m["shift"], 3)
+                # Toggles (star, like, switch, menu): click again so the test leaves state as it found it
+                if (res.mutations or requests) and await target.count():
+                    page.remove_listener("request", on_request)
+                    try:
+                        await page.evaluate(_MEASURE_JS)
+                        await target.click(timeout=2000)
+                        await self._wait_quiet(page, before_url)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            res.error = str(exc).splitlines()[0][:200]
+        finally:
+            for event, handler in (("request", on_request), ("console", on_console), ("pageerror", on_error)):
+                try:
+                    page.remove_listener(event, handler)
+                except Exception:
+                    pass
+        return res
 
     async def execute_workflow(
         self,

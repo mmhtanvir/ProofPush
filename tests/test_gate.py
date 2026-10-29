@@ -98,4 +98,5 @@ class TestGate(GitRepoTestCase):
         from unittest import mock
         with mock.patch.dict(os.environ, clean, clear=True):
             self.assertEqual(secret_value(self.local_dir, "TEAM_WEBHOOK"), "https://hooks.slack.com/services/T/B/x")
-        self.assertEqual(stat.S_IMODE(secrets.stat().st_mode), 0o600)
+        if sys.platform != "win32":  # no Unix permission bits on Windows
+            self.assertEqual(stat.S_IMODE(secrets.stat().st_mode), 0o600)
