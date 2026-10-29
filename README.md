@@ -476,6 +476,21 @@ ProofPush runs inside `git push`, so it works with any AI CLI that pushes: Claud
   | `CI` | CI runners |
   | `PROOFPUSH_NONINTERACTIVE=1` | Anything else: set it in your agent's environment |
 
+- **Tells the agent why.** A blocked push ends with a short plain-text list, the part of the output agents read:
+
+  ```
+  [proofpush] WHY THIS PUSH WAS BLOCKED: Non-interactive session (Claude Code): ...
+    1. SECRET: settings.txt:1
+       what: REDACTED_AWS_KEY_ID in outgoing code
+    2. REGRESSION: API GET /api/total [total uses quantity (bug #12)]
+       what: previously fixed bug is back: assertion failed: `response.body.total == 2.5 * request.query.qty` (response.body.total = 2.5, ...)
+       reproduce: GET /api/total?qty=2
+    3. REMOVED FUNCTIONALITY: API GET /api/legacy [valid request]
+       what: endpoint removed: answered 200 before, now 404
+  Full report: .proofpush/reports/report_....md  (JSON: ....json)
+  ```
+
+  Deployment gates print the same list ("WHY THIS DEPLOYMENT WAS REJECTED").
 - **Blocks with instructions the agent can act on.** Unattended pushes with findings are blocked (`policies.interactive_fallback: block`, the default). The output names the agent, points to the Markdown report, and tells it to fix the findings or ask you, and not to bypass with `--no-verify`.
 - **You approve one push** with `PROOFPUSH_MODE=advisory git push` (hooks can't take flags, so `PROOFPUSH_MODE` overrides the mode for that push).
 - **Tell ProofPush what the agent was doing**: `PROOFPUSH_TASK="Add coupon support" git push`, or write `.proofpush-task.md`.

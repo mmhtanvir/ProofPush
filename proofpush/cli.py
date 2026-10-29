@@ -35,7 +35,7 @@ from proofpush.ai_engine import get_ai_adapter
 from proofpush.reporter import ReportGenerator, AuditReportData
 from proofpush.policy_enforcer import PolicyEnforcer
 from proofpush.doctor import Doctor
-from proofpush.utils import detect_unattended, exclude_from_git, run_command
+from proofpush.utils import detect_unattended, exclude_from_git, redact_secrets, run_command
 
 
 console = Console(soft_wrap=True)
@@ -476,10 +476,46 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
     if decision.allowed:
         console.print(f"[proofpush] Gate passed: deploying {candidate_sha[:10]}.", markup=False)
         sys.exit(deploy)
+    console.print("\n" + why_blocked("WHY THIS DEPLOYMENT WAS REJECTED", decision.reason, findings, security_res,
+                                     {"markdown": html.replace(".html", ".md"), "json": html.replace(".html", ".json")}), markup=False)
     console.print(f"[proofpush] Deployment REJECTED: {decision.reason} Live stays on {base_sha[:10]}.", markup=False)
     _notify(cfg, repo_path, f"ProofPush rejected a deployment of {branch}", decision.reason, findings, html,
             {"event": "deploy_rejected", "branch": branch, "live": base_sha, "candidate": candidate_sha})
     sys.exit(reject)
+
+
+BLOCKING_ORDER = ["REGRESSION", "SUSPICIOUS_PUSH", "REMOVED_FUNCTIONALITY", "POSSIBLE_REGRESSION", "BLOCKED"]
+
+
+def why_blocked(headline: str, reason: str, findings: List[Finding], security_res=None,
+                report_paths: Optional[Dict[str, str]] = None, limit: int = 8) -> str:
+    """Short plain-text list of what blocked a push/deploy: the last thing an AI agent (or a person) reads."""
+    items = []
+    for s in (security_res.secrets_found if security_res else []):
+        items.append(("SECRET", f"{s.file_path}:{s.line_number}", f"{s.pattern_type} in outgoing code", ""))
+    for t in (security_res.deleted_tests if security_res else []):
+        items.append(("DELETED TEST", t, "test file removed in this push", ""))
+    ranked = sorted((f for f in findings if f.category in BLOCKING_ORDER),
+                    key=lambda f: (not f.is_critical, BLOCKING_ORDER.index(f.category)))
+    for f in ranked:
+        # BLOCKED findings keep the reason in actual_result ("Browser checks not run" alone says nothing)
+        what = f.actual_result if f.category == "BLOCKED" else (f.after_behavior or f.actual_result)
+        repro = next((r for r in f.reproduction_steps if r and not r.startswith(("body:", "+", "-"))), "")
+        items.append((f.category.replace("_", " ") + (" (critical)" if f.is_critical and f.category != "REGRESSION" else ""),
+                      f.target, what, repro))
+    lines = [f"[proofpush] {headline}: {reason}"]
+    for n, (kind, target, what, repro) in enumerate(items[:limit], 1):
+        lines.append(f"  {n}. {kind}: {target}")
+        lines.append(f"     what: {redact_secrets(' / '.join(str(what).split(chr(10))[:3]))[:300]}")
+        if repro:
+            lines.append(f"     reproduce: {redact_secrets(str(repro))[:200]}")
+    if len(items) > limit:
+        lines.append(f"  (+{len(items) - limit} more in the report)")
+    if not items:
+        lines.append("  (no individual finding: see the reason above)")
+    if report_paths:
+        lines.append(f"Full report: {report_paths.get('markdown')}  (JSON: {report_paths.get('json')})")
+    return "\n".join(lines)
 
 
 def _notify(cfg: AuditorConfig, repo_path: Path, title: str, reason: str, findings: List[Finding],
@@ -956,11 +992,14 @@ def _audit_update(
         branch = active_update.remote_ref.replace("refs/heads/", "")
         _notify(cfg, repo_path, f"ProofPush blocked a push to {branch}", decision.reason, findings,
                 saved_paths["html"], {"event": "push_blocked", "branch": branch, "commit": proposed_sha})
+    if decision.exit_code != 0:
+        # Plain-text reasons at the very end of the output, where AI CLIs (and people) look
+        console.print("\n" + why_blocked("WHY THIS PUSH WAS BLOCKED", decision.reason, findings, security_res, saved_paths),
+                      markup=False)
     if decision.exit_code != 0 and detect_unattended():
-        # Plain text for AI agents reading the push output
         console.print(
-            f"\n[proofpush] Push blocked for {detect_unattended()}. Full report: {saved_paths['markdown']}\n"
-            "AI agents: do not bypass with --no-verify or by changing ProofPush settings. Fix the findings above, "
+            f"[proofpush] Push blocked for {detect_unattended()}.\n"
+            "AI agents: do not bypass with --no-verify or by changing ProofPush settings. Fix the items listed above, "
             "or show them to the user and ask how to proceed. The user can approve one push with "
             "`PROOFPUSH_MODE=advisory git push`.",
             markup=False,

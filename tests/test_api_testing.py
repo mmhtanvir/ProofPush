@@ -233,6 +233,13 @@ class TestApiTesting(GitRepoTestCase):
         self.assertIn("previously fixed bug is back", text)
         self.assertIn("/api/legacy", text)
         self.assertIn("Push blocked for Claude Code", text)
+        # The agent gets the reasons as a short list at the very end, not only inside the long report
+        why = text[text.index("WHY THIS PUSH WAS BLOCKED"):]
+        self.assertIn("REGRESSION: API GET /api/total [total uses quantity (bug #12)]", why)
+        self.assertIn("what: previously fixed bug is back", why)
+        self.assertIn("reproduce: GET /api/total?qty=2", why)
+        self.assertIn("REMOVED FUNCTIONALITY: API GET /api/legacy", why)
+        self.assertIn("Full report:", why)
         self.assertNotIn("Approve push anyway", text)
 
     def test_scenario_72_other_user_cannot_read_your_records(self):
