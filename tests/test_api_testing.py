@@ -259,7 +259,8 @@ class TestApiTesting(GitRepoTestCase):
         fake = bin_dir / "docker"
         fake.write_text('#!/bin/sh\necho "$@" >> "$FAKE_DOCKER_LOG"\n'
                         'if [ "$1" = run ] && [ -n "$FAKE_DOCKER_DOWN" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi\n'
-                        'if [ "$1" = run ]; then echo cid; fi\nexit 0\n')
+                        'if [ "$1" = run ]; then echo cid; fi\n'
+                        'if [ "$1" = port ]; then echo 127.0.0.1:55432; fi\nexit 0\n')
         fake.chmod(0o755)
         self.commit_file("app.py", "import http.server, os\nopen('db.txt', 'w').write(os.environ['DATABASE_URL'])\n"
                          "http.server.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), http.server.SimpleHTTPRequestHandler).serve_forever()\n", "app")
@@ -270,12 +271,14 @@ class TestApiTesting(GitRepoTestCase):
             try:
                 env = em.launch_environment("HEAD", "proposed")
                 self.assertTrue(env.is_ready, env.startup_error)
-                self.assertRegex(env.database_url, r"^postgresql://proofpush:proofpush@127\.0\.0\.1:\d+/proofpush$")
+                self.assertEqual(env.database_url, "postgresql://proofpush:proofpush@127.0.0.1:55432/proofpush")
                 self.assertEqual((env.worktree_path / "db.txt").read_text(), env.database_url)  # the app got it
             finally:
                 em.cleanup()
             calls = log.read_text()
             self.assertIn("run -d --rm --name proofpush-proposed-", calls)
+            self.assertIn("-p 127.0.0.1::5432", calls)  # Docker picks the port: no race between concurrent runs
+            self.assertIn("--label proofpush.owner_pid=", calls)
             self.assertIn("postgres:16-alpine", calls)
             self.assertIn("pg_isready", calls)
             self.assertIn("rm -f proofpush-proposed-", calls)
@@ -284,7 +287,7 @@ class TestApiTesting(GitRepoTestCase):
                 em = EnvironmentManager(self.local_dir, cfg)
                 env = em.launch_environment("HEAD", "baseline")
                 em.cleanup()
-                self.assertIn("Is Docker running?", env.startup_error)
+                self.assertIn("Is Docker running", env.startup_error)
         with mock.patch("shutil.which", return_value=None):
             em = EnvironmentManager(self.local_dir, cfg)
             env = em.launch_environment("HEAD", "baseline")

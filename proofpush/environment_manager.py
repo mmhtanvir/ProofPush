@@ -88,20 +88,44 @@ class EnvironmentManager:
         docker = shutil.which("docker") or shutil.which("podman")
         if not docker:
             return None, "application.database: postgres needs Docker or Podman, which isn't installed"
-        port = find_free_port(start=5500 + (100 if label == "proposed" else 0))
+        self._reap_orphans(docker)
         name = f"proofpush-{label}-{os.getpid()}-{int(time.time() * 1000) % 100000}"
-        code, out, err = run_command([docker, "run", "-d", "--rm", "--name", name, "-e", "POSTGRES_USER=proofpush",
-                                      "-e", "POSTGRES_PASSWORD=proofpush", "-e", "POSTGRES_DB=proofpush",
-                                      "-p", f"127.0.0.1:{port}:5432", self.app_config.database_image], timeout=300)
+        # Port chosen by Docker (127.0.0.1::5432): concurrent ProofPush runs can't race for the same host port
+        code, out, err = run_command([docker, "run", "-d", "--rm", "--name", name,
+                                      "--label", "proofpush.disposable=1", "--label", f"proofpush.owner_pid={os.getpid()}",
+                                      "-e", "POSTGRES_USER=proofpush", "-e", "POSTGRES_PASSWORD=proofpush",
+                                      "-e", "POSTGRES_DB=proofpush", "-p", "127.0.0.1::5432", self.app_config.database_image],
+                                     timeout=300)
         if code != 0:
-            return None, f"Could not start a disposable PostgreSQL ({(err or out).strip()[:200]}). Is Docker running?"
+            return None, f"Could not start a disposable PostgreSQL ({(err or out).strip()[:200]}). Is Docker running and the image available?"
         self._containers.append((docker, name))
+        mapped = run_command([docker, "port", name, "5432/tcp"], timeout=15)[1].strip().splitlines()
+        port = mapped[0].rsplit(":", 1)[-1] if mapped else ""
+        if not port.isdigit():
+            return None, f"The disposable PostgreSQL started but its port could not be read ({mapped})"
         deadline = time.time() + 60
         while time.time() < deadline:
             if run_command([docker, "exec", name, "pg_isready", "-U", "proofpush", "-d", "proofpush"], timeout=10)[0] == 0:
                 return f"postgresql://proofpush:proofpush@127.0.0.1:{port}/proofpush", None
             time.sleep(0.5)
         return None, "The disposable PostgreSQL did not become ready within 60 s"
+
+    @staticmethod
+    def _reap_orphans(docker: str) -> None:
+        """Remove disposable databases left by ProofPush runs that were killed outright (their owner process is gone)."""
+        out = run_command([docker, "ps", "-a", "--filter", "label=proofpush.disposable=1",
+                           "--format", '{{.Names}} {{.Label "proofpush.owner_pid"}}'], timeout=30)[1]
+        for line in out.splitlines():
+            name, _, pid = line.strip().partition(" ")
+            if not pid.isdigit() or int(pid) == os.getpid():
+                continue
+            try:
+                os.kill(int(pid), 0)
+                continue  # owner still running: not ours to touch
+            except ProcessLookupError:
+                run_command([docker, "rm", "-f", name], timeout=60)
+            except PermissionError:
+                continue  # exists, owned by someone else
 
     def _link_local_files(self, worktree: Path) -> None:
         """Give the checkout what git doesn't track but apps need to start: installed dependencies and .env files.
