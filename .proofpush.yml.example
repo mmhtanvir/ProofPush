@@ -1,5 +1,5 @@
-# Local Website Change Auditor Configuration
-# Place this file as .change-auditor.yml in your repository root
+# ProofPush Configuration
+# Place this file as .proofpush.yml in your repository root
 
 # Audit mode:
 # - advisory: run audit, show findings, never block push

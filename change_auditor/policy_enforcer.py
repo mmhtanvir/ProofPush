@@ -116,7 +116,7 @@ class PolicyEnforcer:
                 )
 
         # Interactive user prompt
-        print("\n[change-auditor] Attention: Issues detected during pre-push audit.")
+        print("\n[proofpush] Attention: Issues detected during pre-push audit.")
         if has_secret:
             print("  - [CRITICAL] Secret or credential detected in commits!")
         if has_critical_regression:

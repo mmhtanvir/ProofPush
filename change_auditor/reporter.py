@@ -51,7 +51,7 @@ class AuditReportData:
 class ReportGenerator:
     def __init__(self, repo_path: Path):
         self.repo_path = repo_path.resolve()
-        self.reports_dir = self.repo_path / ".change-auditor" / "reports"
+        self.reports_dir = self.repo_path / ".proofpush" / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.console = Console()
 

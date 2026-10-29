@@ -1,5 +1,5 @@
 """
-Utility helpers for change-auditor.
+Utility helpers for ProofPush.
 Includes port finding, process execution, secret redaction, and serialization.
 """
 

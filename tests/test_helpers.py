@@ -1,5 +1,5 @@
 """
-Test Helpers and Fixtures for change-auditor test suite.
+Test Helpers and Fixtures for ProofPush test suite.
 Sets up temporary git repositories, bare remotes, mock websites, and pre-push hooks.
 """
 

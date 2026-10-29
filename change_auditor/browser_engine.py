@@ -82,7 +82,7 @@ class BrowserEngine:
             context = await browser.new_context(
                 viewport=vp,
                 ignore_https_errors=True,
-                user_agent="change-auditor-functional-agent",
+                user_agent="proofpush-functional-agent",
             )
             page = await context.new_page()
 
@@ -232,7 +232,7 @@ class BrowserEngine:
             context = await browser.new_context(
                 viewport=vp,
                 ignore_https_errors=True,
-                user_agent="change-auditor-workflow-runner",
+                user_agent="proofpush-workflow-runner",
             )
             page = await context.new_page()
 

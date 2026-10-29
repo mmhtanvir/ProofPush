@@ -1,5 +1,5 @@
 """
-Command Line Interface for change-auditor.
+Command Line Interface for ProofPush.
 Orchestrates the pre-push workflow, baseline capture, diagnostics, and reports.
 """
 
@@ -205,7 +205,7 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
 
     if not baseline_sha:
         console.print("[bold red]Error: Could not reliably establish a baseline Git revision.[/bold red]")
-        console.print("Please capture a baseline first with `change-auditor baseline capture` or specify `--base <commit>`.")
+        console.print("Please capture a baseline first with `proofpush baseline capture` or specify `--base <commit>`.")
         if cfg.policies.fail_open:
             console.print("[yellow]Policy fail_open is true: Allowing push with warning.[/yellow]")
             sys.exit(0)
@@ -250,7 +250,7 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
                 expected_behavior="Application starts cleanly on isolated port",
                 actual_result=err_msg,
                 confidence=1.0,
-                recommended_action="Check application startup configuration in .change-auditor.yml",
+                recommended_action="Check application startup configuration in .proofpush.yml",
                 is_critical=True,
             ))
         else:
@@ -276,7 +276,7 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
             browser_engine = BrowserEngine(headless=True)
             vis_comparator = VisualComparator(
                 diff_threshold=cfg.visual.diff_threshold,
-                reports_dir=repo_path / ".change-auditor" / "reports"
+                reports_dir=repo_path / ".proofpush" / "reports"
             )
             classifier = RegressionClassifier(task_context)
 
@@ -462,11 +462,11 @@ def _execute_baseline_list():
 def report(json_format: bool, open_browser: bool):
     """View the latest audit report."""
     repo_path = Path.cwd().resolve()
-    reports_dir = repo_path / ".change-auditor" / "reports"
+    reports_dir = repo_path / ".proofpush" / "reports"
     latest_html = reports_dir / "latest.html"
 
     if not latest_html.is_file():
-        console.print("[yellow]No reports found. Run `change-auditor review` first.[/yellow]")
+        console.print("[yellow]No reports found. Run `proofpush review` first.[/yellow]")
         return
 
     if open_browser:

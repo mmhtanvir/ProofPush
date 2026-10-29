@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.proofpush/
 .change-auditor/
 .auditor_env_*
 .DS_Store

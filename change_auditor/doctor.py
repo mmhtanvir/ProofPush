@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from change_auditor.utils import run_command
 from change_auditor.git_interceptor import GitInterceptor
-from change_auditor.config import load_config
+from change_auditor.config import load_config, find_config_file
 from change_auditor.baseline_manager import BaselineManager
 
 
@@ -61,7 +61,7 @@ class Doctor:
                 "passed": hook_installed,
                 "detail": (
                     f"Installed at {hook_status.get('path')} (legacy preserved: {hook_status.get('has_legacy')})"
-                    if hook_installed else "Not installed. Run `change-auditor install` to enable."
+                    if hook_installed else "Not installed. Run `proofpush install` to enable."
                 ),
             })
 
@@ -87,8 +87,8 @@ class Doctor:
 
         # 6. Configuration file check
         cfg = load_config(self.repo_path)
-        cfg_file = self.repo_path / ".change-auditor.yml"
-        has_cfg = cfg_file.is_file()
+        cfg_file = find_config_file(self.repo_path)
+        has_cfg = cfg_file is not None
         checks.append({
             "name": "Configuration File",
             "passed": True,  # Optional since defaults work

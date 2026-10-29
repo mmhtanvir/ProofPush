@@ -55,7 +55,7 @@ After:  Uncaught TypeError: Cannot read property 'calculateTotal'
 Evidence:
 - Step 2 failed in workflow 'Standard Checkout'
 - Console error captured in DevTools trace
-- HTML Evidence Viewer: .change-auditor/reports/report_latest.html
+- HTML Evidence Viewer: .proofpush/reports/report_latest.html
 ------------------------------------------------------------
 🛑 RECOMMENDATION: PUSH BLOCKED
 Fix the checkout error or use git push --no-verify to override.

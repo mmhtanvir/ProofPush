@@ -99,7 +99,7 @@ class TaskResolver:
         # Priority 5: Interactive Question (if enabled and TTY)
         if interactive and sys.stdin.isatty():
             try:
-                print("\n[change-auditor] No task description found.")
+                print("\n[proofpush] No task description found.")
                 user_task = input("What change or feature were you working on? ").strip()
                 if user_task:
                     clean, injected = self.sanitize_input(user_task)

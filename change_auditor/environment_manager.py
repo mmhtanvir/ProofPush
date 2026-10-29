@@ -202,7 +202,7 @@ class EnvironmentManager:
                 return instance
 
             try:
-                req = urllib.request.Request(health_url, headers={"User-Agent": "change-auditor-healthcheck"})
+                req = urllib.request.Request(health_url, headers={"User-Agent": "proofpush-healthcheck"})
                 with urllib.request.urlopen(req, timeout=1.5) as resp:
                     if resp.status in (200, 204, 301, 302, 304, 401, 403):
                         ready = True

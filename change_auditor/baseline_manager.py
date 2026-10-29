@@ -34,7 +34,9 @@ class BaselineManager:
     def __init__(self, repo_path: Path):
         self.repo_path = repo_path.resolve()
         self.repo_id = get_repo_identifier(self.repo_path)
-        self.storage_dir = Path.home() / ".change-auditor" / "baselines" / self.repo_id
+        legacy_dir = Path.home() / ".change-auditor" / "baselines" / self.repo_id
+        # Keep using baselines captured before the ProofPush rename
+        self.storage_dir = legacy_dir if legacy_dir.is_dir() else Path.home() / ".proofpush" / "baselines" / self.repo_id
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
     def resolve_baseline_sha(
