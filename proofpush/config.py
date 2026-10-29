@@ -45,6 +45,7 @@ class WorkflowConfig:
     name: str
     path: str = "/"
     steps: List[WorkflowStep] = field(default_factory=list)
+    guard: bool = False  # reproduces a previously fixed bug: any failure blocks, whatever the baseline did
 
 
 @dataclass
@@ -196,6 +197,7 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
                 name=w["name"],
                 path=w.get("path", "/"),
                 steps=steps,
+                guard=bool(w.get("guard", False)),
             ))
         config.workflows = parsed_workflows
 

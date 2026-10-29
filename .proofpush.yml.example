@@ -13,7 +13,8 @@ mode: interactive
 audit_level: quick
 
 # Baseline strategy:
-# - merge-base: git merge base against remote ref or target branch (recommended)
+# - merge-base: on push to an existing branch, the commit live on that branch now; otherwise
+#   the git merge base against reference_ref (recommended)
 # - captured: compare against locally saved snapshot captured with `proofpush baseline capture`
 # - commit: compare against explicit git revision
 # - latest-passed: compare against latest commit that successfully passed audit
@@ -53,6 +54,21 @@ workflows:
         optional: true
       - action: assert_url
         expected: "/checkout"
+
+  # guard: true pins a previously fixed bug. If it fails, the push is flagged as a
+  # regression even when the baseline fails too (e.g. a stale checkout undoing a fix).
+  - name: "Coupon updates order total (bug fixed in #42)"
+    path: "/checkout"
+    guard: true
+    steps:
+      - action: fill
+        selector: "#coupon"
+        value: "SAVE10"
+      - action: click
+        selector: "#apply-btn"
+      - action: assert_text
+        selector: "#total"
+        expected: "$90.00"
 
 # Visual comparison settings
 visual:

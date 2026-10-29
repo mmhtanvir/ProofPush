@@ -5,6 +5,7 @@ Covers:
 - Scenario 13: Unavailable test database
 - Scenario 14: Baseline that cannot be established
 - Scenario 15: Missing AI provider (local mode fallback)
+- Scenario 32: Force-push from a stale checkout uses the live remote tip as baseline
 - Scenario 22: Failed critical test under strict mode (exit code 1)
 - Scenario 23: Inconclusive test under advisory mode (exit code 0)
 - Scenario 26: Unavailable browser handled cleanly
@@ -28,6 +29,7 @@ from proofpush.baseline_manager import BaselineManager
 from proofpush.ai_engine import get_ai_adapter, LocalRuleEngine
 from proofpush.environment_manager import EnvironmentManager
 from proofpush.unrelated_analyzer import SecurityAuditResult, SecretFinding
+from proofpush.utils import run_command
 
 
 class TestPoliciesAndEnvironments(GitRepoTestCase):
@@ -85,6 +87,27 @@ class TestPoliciesAndEnvironments(GitRepoTestCase):
         # Empty repo without remote commits
         res = bm.resolve_baseline_sha(strategy="merge-base", proposed_sha="nonexistent_sha")
         self.assertIsNone(res)
+
+    def test_scenario_32_stale_force_push_baseline_is_live_remote(self):
+        """Scenario 32: A fix pushed from another clone is the baseline, not the stale merge-base."""
+        old_sha = self.commit_file("app.js", "buggy", "initial")
+        run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
+
+        other = self.test_dir / "other"
+        run_command(["git", "clone", "-q", str(self.remote_dir), str(other)], cwd=self.test_dir)
+        run_command(["git", "config", "user.name", "Other"], cwd=other)
+        run_command(["git", "config", "user.email", "other@example.com"], cwd=other)
+        (other / "app.js").write_text("fixed", encoding="utf-8")
+        run_command(["git", "commit", "-qam", "fix bug"], cwd=other)
+        run_command(["git", "push", "-q", "origin", "main"], cwd=other)
+        _, fix_sha, _ = run_command(["git", "rev-parse", "HEAD"], cwd=other)
+        fix_sha = fix_sha.strip()
+
+        # Local clone never fetched the fix and builds on the old commit
+        stale_sha = self.commit_file("other.js", "x", "unrelated change")
+        bm = BaselineManager(self.local_dir)
+        self.assertEqual(bm.resolve_baseline_sha("merge-base", stale_sha, remote_sha=fix_sha), fix_sha)
+        self.assertNotEqual(fix_sha, old_sha)
 
     def test_scenario_15_missing_ai_provider_local_fallback(self):
         """Scenario 15: No external AI keys configured; seamlessly falls back to LocalRuleEngine."""

@@ -313,7 +313,7 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
                     workflows_checked_count += 1
                     base_wf_res = await browser_engine.execute_workflow(base_url_b, wf)
                     prop_wf_res = await browser_engine.execute_workflow(base_url_p, wf)
-                    wf_finding = classifier.classify_workflow(base_wf_res, prop_wf_res)
+                    wf_finding = classifier.classify_workflow(base_wf_res, prop_wf_res, guard=wf.guard)
                     findings.append(wf_finding)
 
             # Run async browser checks

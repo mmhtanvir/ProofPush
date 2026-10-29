@@ -142,6 +142,21 @@ workflows:
       - action: assert_url
         expected: "/checkout"
 
+  # guard: true pins a previously fixed bug. If it fails, the push is flagged as a
+  # regression even when the baseline fails too (e.g. a stale checkout undoing a fix).
+  - name: "Coupon updates order total (bug fixed in #42)"
+    path: "/checkout"
+    guard: true
+    steps:
+      - action: fill
+        selector: "#coupon"
+        value: "SAVE10"
+      - action: click
+        selector: "#apply-btn"
+      - action: assert_text
+        selector: "#total"
+        expected: "$90.00"
+
 # Visual viewports to compare
 visual:
   enabled: true

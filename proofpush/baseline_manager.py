@@ -67,14 +67,19 @@ class BaselineManager:
                 return out.strip()
 
         # 4. Merge-base strategy (default and most reliable)
-        # If remote_sha is given and valid, check merge-base with remote
+        # Pushing to an existing branch: compare against what is live on it now. For fast-forwards this
+        # equals the merge-base; for force-pushes from a stale checkout the merge-base predates later
+        # fixes, so a reintroduced bug would look "unchanged".
         if remote_sha and remote_sha != "0000000000000000000000000000000000000000":
-            code, out, _ = run_command(
-                ["git", "merge-base", remote_sha, proposed_sha],
-                cwd=self.repo_path
-            )
-            if code == 0 and out.strip():
-                return out.strip()
+            def has_commit() -> bool:
+                return run_command(["git", "cat-file", "-e", f"{remote_sha}^{{commit}}"], cwd=self.repo_path)[0] == 0
+
+            if not has_commit():
+                # Limit: hook doesn't receive the remote name, so fetch all remotes; pass it through if this gets slow
+                run_command(["git", "fetch", "--all", "--quiet"], cwd=self.repo_path)
+            if has_commit():
+                return remote_sha
+            print(f"Warning: live remote commit {remote_sha[:10]} is not available locally; falling back to merge-base.")
 
         # If reference_ref is configured (e.g. origin/main)
         ref = reference_ref or "origin/main"

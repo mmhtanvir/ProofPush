@@ -168,9 +168,26 @@ class RegressionClassifier:
         self,
         base_wf: Optional[WorkflowExecutionResult],
         prop_wf: WorkflowExecutionResult,
+        guard: bool = False,
     ) -> Finding:
         """Classify workflow results between baseline and proposed versions."""
         target_name = f"Workflow: {prop_wf.workflow_name}"
+
+        # Guard workflows pin previously fixed bugs: failure is a regression even if the baseline failed too
+        if guard and not prop_wf.passed:
+            return Finding(
+                category="REGRESSION",
+                target=target_name,
+                before_behavior="Bug was fixed previously (guard workflow)",
+                after_behavior=f"Failed at step {prop_wf.steps_completed + 1} of {prop_wf.total_steps}: {prop_wf.error_message}",
+                expected_behavior="Previously fixed bug must stay fixed.",
+                actual_result=f"Previously fixed bug reappeared: {prop_wf.error_message}",
+                confidence=0.99,
+                recommended_action=f"A previously fixed bug is back ('{prop_wf.workflow_name}'). Re-apply the fix before pushing.",
+                is_critical=True,
+                console_errors=prop_wf.console_errors,
+                reproduction_steps=[f"Run workflow '{prop_wf.workflow_name}' on {prop_wf.route}", f"Step error: {prop_wf.error_message}"],
+            )
 
         # If proposed workflow passed completely
         if prop_wf.passed:

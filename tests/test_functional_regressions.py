@@ -10,6 +10,7 @@ Covers:
 - Scenario 11: Changed authentication requirement
 - Scenario 16: Failed browser test
 - Scenario 17: Intentionally changed workflow (EXPECTED_CHANGE)
+- Scenario 31: Guard workflow for a previously fixed bug fails (REGRESSION even if baseline failed)
 """
 
 import unittest
@@ -178,3 +179,20 @@ class TestFunctionalRegressions(unittest.TestCase):
         finding = classifier.classify_route_visit("/checkout", base_visit, prop_visit)
         self.assertEqual(finding.category, "EXPECTED_CHANGE")
         self.assertFalse(finding.is_critical)
+
+    def test_scenario_31_guard_workflow_previously_fixed_bug(self):
+        """Scenario 31: Guard workflow failing is a REGRESSION even when baseline also failed and name matches task."""
+        failed = WorkflowExecutionResult(
+            workflow_name="Checkout coupon total bug",
+            route="/checkout",
+            passed=False,
+            steps_completed=2,
+            total_steps=3,
+            error_message="Total not updated after coupon",
+        )
+        self.assertEqual(self.classifier.classify_workflow(failed, failed).category, "POSSIBLE_REGRESSION")
+
+        finding = self.classifier.classify_workflow(failed, failed, guard=True)
+        self.assertEqual(finding.category, "REGRESSION")
+        self.assertTrue(finding.is_critical)
+        self.assertIn("Previously fixed bug reappeared", finding.actual_result)
