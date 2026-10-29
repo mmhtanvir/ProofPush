@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 import shutil
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from proofpush.utils import run_command
 from proofpush.git_interceptor import GitInterceptor
 from proofpush.config import load_config, find_config_file
@@ -71,7 +71,6 @@ class Doctor:
         browser_passed = False
         browser_detail = ""
         try:
-            import playwright
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
                 b = p.chromium.launch(headless=True)

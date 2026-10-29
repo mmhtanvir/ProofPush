@@ -6,13 +6,11 @@ network failure monitoring, and safe interactive element inspection.
 
 from __future__ import annotations
 
-import asyncio
-import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Set
-from playwright.async_api import async_playwright, Browser, Page, Response, Request
+from typing import List, Dict, Any, Optional
+from playwright.async_api import async_playwright, Response, Request
 
-from proofpush.config import WorkflowConfig, WorkflowStep
+from proofpush.config import WorkflowConfig
 
 DESTRUCTIVE_KEYWORDS = [
     "delete", "remove", "destroy", "drop", "purge", "truncate", "terminate",

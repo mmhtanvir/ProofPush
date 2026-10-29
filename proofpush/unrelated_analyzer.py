@@ -10,9 +10,9 @@ import re
 import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 from proofpush.task_resolver import TaskContext
-from proofpush.utils import run_command, SECRET_PATTERNS
+from proofpush.utils import run_command, redact_secrets, SECRET_PATTERNS
 
 
 @dataclass
@@ -237,7 +237,7 @@ class UnrelatedAnalyzer:
                             file_path=current_file,
                             line_number=line_num,
                             pattern_type=placeholder.strip("[]"),
-                            snippet=added_content[:100].strip(),
+                            snippet=redact_secrets(added_content[:100].strip()),
                         ))
                         seen_line_secrets.add(key)
                         break

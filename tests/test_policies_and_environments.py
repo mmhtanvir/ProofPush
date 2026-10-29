@@ -26,9 +26,8 @@ from proofpush.config import PoliciesConfig, ApplicationConfig, AIConfig
 from proofpush.policy_enforcer import PolicyEnforcer
 from proofpush.classifier import Finding
 from proofpush.baseline_manager import BaselineManager
-from proofpush.ai_engine import get_ai_adapter, LocalRuleEngine
+from proofpush.ai_engine import get_ai_adapter
 from proofpush.environment_manager import EnvironmentManager
-from proofpush.unrelated_analyzer import SecurityAuditResult, SecretFinding
 from proofpush.utils import run_command
 
 

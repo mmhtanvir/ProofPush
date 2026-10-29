@@ -7,7 +7,6 @@ hook chaining, worktree awareness, and recursion prevention.
 from __future__ import annotations
 
 import os
-import sys
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,17 +24,22 @@ if [ "${PROOFPUSH_RUNNING}" = "1" ]; then
     exit 0
 fi
 
-# Detect if running via global core.hooksPath and repo is not configured for ProofPush
-GLOBAL_HOOKS=$(git config --global core.hooksPath 2>/dev/null || echo "")
-if [ -n "${GLOBAL_HOOKS}" ]; then
-    if [ ! -f ".proofpush.yml" ] && [ ! -f ".proofpush.yaml" ] && [ ! -f ".proofpush-task.md" ]; then
-        exit 0
-    fi
-fi
-
-# Run legacy / pre-existing hook first if present
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEGACY_HOOK="${HOOK_DIR}/pre-push.legacy"
+EXTRA_ARGS=""
+
+# Running via global core.hooksPath: the repo's own .git/hooks are bypassed, so chain its pre-push,
+# and audit unconfigured repos with git-only checks (past fixes, secrets) instead of booting an app
+GLOBAL_HOOKS=$(git config --global core.hooksPath 2>/dev/null || echo "")
+if [ -n "${GLOBAL_HOOKS}" ]; then
+    REPO_HOOK="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/pre-push"
+    if [ ! -x "${LEGACY_HOOK}" ] && [ -x "${REPO_HOOK}" ] && ! grep -q proofpush "${REPO_HOOK}"; then
+        LEGACY_HOOK="${REPO_HOOK}"
+    fi
+    if [ ! -f ".proofpush.yml" ] && [ ! -f ".proofpush.yaml" ] && [ ! -f ".proofpush-task.md" ]; then
+        EXTRA_ARGS="--history-only"
+    fi
+fi
 
 BIN_CMD="proofpush"
 
@@ -48,13 +52,30 @@ if [ -f "${LEGACY_HOOK}" ] && [ -x "${LEGACY_HOOK}" ]; then
         rm -f "${STDIN_TEMP}"
         exit ${LEGACY_EXIT}
     fi
-    exec ${BIN_CMD} review --hook < "${STDIN_TEMP}"
+    ${BIN_CMD} review --hook ${EXTRA_ARGS} < "${STDIN_TEMP}"
     EXIT_CODE=$?
     rm -f "${STDIN_TEMP}"
     exit ${EXIT_CODE}
 else
-    exec ${BIN_CMD} review --hook
+    exec ${BIN_CMD} review --hook ${EXTRA_ARGS}
 fi
+"""
+
+
+# Client-side hooks that a global core.hooksPath would otherwise hide from every repo
+PASSTHROUGH_HOOKS = [
+    "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit",
+    "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge",
+    "post-rewrite", "pre-auto-gc", "reference-transaction", "sendemail-validate", "post-index-change",
+]
+
+PASSTHROUGH_TEMPLATE = """#!/usr/bin/env bash
+# ProofPush passthrough: runs this repo's own .git/hooks script, which global core.hooksPath bypasses
+REPO_HOOK="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/$(basename "$0")"
+if [ -x "${REPO_HOOK}" ]; then
+    exec "${REPO_HOOK}" "$@"
+fi
+exit 0
 """
 
 
@@ -111,9 +132,19 @@ class GitInterceptor:
         """Install pre-push hook. Preserves existing hooks by renaming to pre-push.legacy."""
         if global_mode:
             code, stdout, _ = run_command(["git", "config", "--global", "core.hooksPath"])
-            hooks_dir = Path(stdout.strip()) if (code == 0 and stdout.strip()) else Path.home() / ".git_template" / "hooks"
+            if code == 0 and stdout.strip():
+                hooks_dir = Path(stdout.strip()).expanduser()
+            else:
+                hooks_dir = Path.home() / ".git_template" / "hooks"
+                run_command(["git", "config", "--global", "core.hooksPath", str(hooks_dir)])
+                # Remember we set it, so uninstall never unsets a hooksPath the user had before
+                run_command(["git", "config", "--global", "proofpush.ownsHooksPath", "true"])
             hooks_dir.mkdir(parents=True, exist_ok=True)
-            run_command(["git", "config", "--global", "core.hooksPath", str(hooks_dir)])
+            for name in PASSTHROUGH_HOOKS:
+                shim = hooks_dir / name
+                if not shim.exists():  # never overwrite the user's own global hooks
+                    shim.write_text(PASSTHROUGH_TEMPLATE, encoding="utf-8")
+                    shim.chmod(0o755)
         else:
             hooks_dir = self.get_hooks_dir()
             if not hooks_dir:
@@ -179,13 +210,20 @@ class GitInterceptor:
         if legacy_hook.exists():
             legacy_hook.rename(hook_file)
             restored = True
-        elif global_mode:
-            run_command(["git", "config", "--global", "--unset", "core.hooksPath"])
-            try:
-                hooks_dir.rmdir()
-                hooks_dir.parent.rmdir()
-            except Exception:
-                pass
+        if global_mode:
+            for name in PASSTHROUGH_HOOKS:
+                shim = hooks_dir / name
+                if shim.is_file() and "ProofPush passthrough" in shim.read_text(encoding="utf-8", errors="ignore"):
+                    shim.unlink()
+            code, owns, _ = run_command(["git", "config", "--global", "proofpush.ownsHooksPath"])
+            if not restored and code == 0 and owns.strip() == "true":
+                run_command(["git", "config", "--global", "--unset", "core.hooksPath"])
+                try:
+                    hooks_dir.rmdir()
+                    hooks_dir.parent.rmdir()
+                except Exception:
+                    pass
+            run_command(["git", "config", "--global", "--unset", "proofpush.ownsHooksPath"])
 
         return {
             "success": True,
@@ -310,7 +348,7 @@ class GitInterceptor:
             parts = line.strip().split("\t")
             if len(parts) >= 2:
                 status = parts[0]
-                path = parts[1]
+                parts[1]
                 old_path = parts[1] if len(parts) == 2 else parts[1]
                 new_path = parts[2] if len(parts) > 2 else parts[1]
                 files.append({

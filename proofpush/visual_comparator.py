@@ -9,7 +9,7 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, List
 from PIL import Image, ImageChops, ImageDraw
 
 

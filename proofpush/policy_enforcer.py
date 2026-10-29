@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import webbrowser
 from dataclasses import dataclass
-from typing import Tuple, List, Optional
+from typing import List, Optional
 from proofpush.config import PoliciesConfig
 from proofpush.classifier import Finding
 from proofpush.unrelated_analyzer import SecurityAuditResult

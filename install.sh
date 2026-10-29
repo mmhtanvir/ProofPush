@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ProofPush One-Command Installer
-# Usage: ./install.sh or curl -fsSL https://raw.githubusercontent.com/mmhtanvir/ProofPush/main/install.sh | bash
+# Usage: git clone https://github.com/mmhtanvir/ProofPush.git && cd ProofPush && ./install.sh
 
 set -e
 

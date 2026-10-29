@@ -14,13 +14,13 @@ import shutil
 import tempfile
 import urllib.request
 import urllib.error
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Any, Optional, List
 import subprocess
 
 from proofpush.config import ApplicationConfig, ServiceConfig
-from proofpush.utils import find_free_port, is_port_open, run_command
+from proofpush.utils import find_free_port, run_command
 
 
 @dataclass

@@ -11,7 +11,6 @@ Covers:
 - Scenario 30: Blocked push does not update remote refs
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -78,7 +77,7 @@ class TestGitAndHooks(GitRepoTestCase):
 
     def test_scenario_19_force_push_detection(self):
         """Scenario 19: Identify force push when remote ref is not an ancestor."""
-        c1 = self.commit_file("base.txt", "base", "Initial base")
+        self.commit_file("base.txt", "base", "Initial base")
         # Push initial to remote
         run_command(["git", "push", "origin", "main"], cwd=self.local_dir)
 

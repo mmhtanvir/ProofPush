@@ -9,21 +9,17 @@ Generates:
 
 from __future__ import annotations
 
-import os
 import json
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 
-from proofpush.task_resolver import TaskContext
 from proofpush.classifier import Finding
 from proofpush.visual_comparator import VisualComparisonResult
 from proofpush.unrelated_analyzer import SecurityAuditResult
+from proofpush.utils import run_command
 
 
 @dataclass
@@ -55,7 +51,22 @@ class ReportGenerator:
         self.repo_path = repo_path.resolve()
         self.reports_dir = self.repo_path / ".proofpush" / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+        self._exclude_from_git()
         self.console = Console()
+
+    def _exclude_from_git(self) -> None:
+        """Keep reports out of `git add -A` via the repo-local .git/info/exclude (never touches .gitignore)."""
+        code, out, _ = run_command(["git", "rev-parse", "--git-common-dir"], cwd=self.repo_path)
+        if code != 0:
+            return
+        exclude = (self.repo_path / out.strip()) / "info" / "exclude"
+        try:
+            existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+            if "/.proofpush/" not in existing.splitlines():
+                exclude.parent.mkdir(parents=True, exist_ok=True)
+                exclude.write_text(existing + ("" if existing.endswith("\n") or not existing else "\n") + "/.proofpush/\n", encoding="utf-8")
+        except OSError:
+            pass
 
     def print_terminal_report(self, data: AuditReportData) -> None:
         """Render terminal report matching specification."""
@@ -183,19 +194,19 @@ class ReportGenerator:
 
     def _generate_markdown(self, data: AuditReportData) -> str:
         lines = [
-            f"# ProofPush Audit Report",
-            f"",
+            "# ProofPush Audit Report",
+            "",
             f"- **Date**: {data.timestamp}",
             f"- **Repository**: `{data.repo_path}`",
             f"- **Task**: {data.task_title}",
             f"- **Baseline Commit**: `{data.baseline_sha}`",
             f"- **Proposed Commit**: `{data.proposed_sha}`",
             f"- **Enforcement Decision**: **{data.decision}** ({data.decision_reason})",
-            f"",
-            f"## Results Summary",
-            f"",
-            f"| Metric | Count |",
-            f"|---|---|",
+            "",
+            "## Results Summary",
+            "",
+            "| Metric | Count |",
+            "|---|---|",
             f"| Routes Checked | {data.routes_checked} |",
             f"| Functional Workflows | {data.workflows_checked} |",
             f"| Visual Comparisons | {data.visual_checks} |",
@@ -203,7 +214,7 @@ class ReportGenerator:
             f"| Expected Changes | {data.expected_count} |",
             f"| Regressions | {data.regressions_count} |",
             f"| Not Tested | {data.not_tested_count} |",
-            f"",
+            "",
         ]
 
         if data.findings:

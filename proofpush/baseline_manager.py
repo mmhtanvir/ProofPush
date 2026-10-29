@@ -12,7 +12,6 @@ import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from proofpush.config import BaselineConfig
 from proofpush.utils import get_repo_identifier, run_command, sanitize_dict_secrets
 
 

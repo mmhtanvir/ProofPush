@@ -9,7 +9,6 @@ import os
 import sys
 import asyncio
 import webbrowser
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -20,7 +19,7 @@ from rich.table import Table
 
 from proofpush.config import load_config, AuditorConfig
 from proofpush.git_interceptor import GitInterceptor, PushRefUpdate
-from proofpush.task_resolver import TaskResolver, TaskContext
+from proofpush.task_resolver import TaskResolver
 from proofpush.baseline_manager import BaselineManager, BaselineMetadata
 from proofpush.environment_manager import EnvironmentManager
 from proofpush.route_discoverer import RouteDiscoverer
@@ -41,7 +40,6 @@ console = Console()
 @click.group()
 def main():
     """ProofPush: Audits website functionality and visual regressions before Git push."""
-    pass
 
 
 def ensure_dependencies():
@@ -107,7 +105,7 @@ def uninstall(global_mode: bool):
     interceptor = GitInterceptor()
     res = interceptor.uninstall_hook(global_mode=global_mode)
     if res.get("success"):
-        console.print(f"[bold green]✔ Pre-push hook uninstalled.[/bold green]")
+        console.print("[bold green]✔ Pre-push hook uninstalled.[/bold green]")
         if res.get("restored_legacy"):
             console.print("  [cyan]Notice:[/cyan] Restored previous pre-push.legacy hook.")
     else:
@@ -148,7 +146,8 @@ def doctor():
 @click.option("--task", "explicit_task", default=None, help="Explicit task description")
 @click.option("--base", "explicit_base", default=None, help="Explicit baseline Git revision")
 @click.option("--mode", type=click.Choice(["advisory", "interactive", "strict"]), help="Override audit policy mode")
-def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: Optional[str], mode: Optional[str]):
+@click.option("--history-only", is_flag=True, help="Only run git-based checks (past fixes, secrets); skip app and browser")
+def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: Optional[str], mode: Optional[str], history_only: bool):
     """Audit pending or proposed Git push changes."""
     repo_path = Path.cwd().resolve()
     cfg = load_config(repo_path)
@@ -181,11 +180,28 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
             )
         ]
 
-    # Process first non-delete update
-    active_update = next((u for u in updates if not u.is_delete), None)
-    if not active_update:
+    # Audit every pushed branch (tags point at commits already audited with their branch)
+    to_audit = [u for u in updates if not u.is_delete and not u.remote_ref.startswith("refs/tags/")]
+    if not to_audit:
         sys.exit(0)
+    codes = [
+        _audit_update(repo_path, cfg, interceptor, u, hook, explicit_task, explicit_base, history_only)
+        for u in to_audit
+    ]
+    sys.exit(max(codes))
 
+
+def _audit_update(
+    repo_path: Path,
+    cfg: AuditorConfig,
+    interceptor: GitInterceptor,
+    active_update: PushRefUpdate,
+    hook: bool,
+    explicit_task: Optional[str],
+    explicit_base: Optional[str],
+    history_only: bool,
+) -> int:
+    """Audit one pushed ref and return the policy exit code."""
     proposed_sha = active_update.local_sha
     commit_messages = interceptor.get_commit_messages(active_update.commits)
 
@@ -211,9 +227,9 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
         console.print("Please capture a baseline first with `proofpush baseline capture` or specify `--base <commit>`.")
         if cfg.policies.fail_open:
             console.print("[yellow]Policy fail_open is true: Allowing push with warning.[/yellow]")
-            sys.exit(0)
+            return 0
         else:
-            sys.exit(1)
+            return 1
 
     console.print(f"[bold cyan]Auditing changes:[/bold cyan] {baseline_sha[:10]} (baseline) &rarr; {proposed_sha[:10]} (proposed)")
     console.print(f"[bold cyan]Task:[/bold cyan] {task_context.title}")
@@ -234,96 +250,114 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     routes_checked_count = 0
     workflows_checked_count = 0
 
-    try:
-        # Launch baseline environment
-        console.print("Launching isolated baseline environment...")
-        base_env = env_mgr.launch_environment(baseline_sha, label="baseline")
+    # Unconfigured repo under a global hook: git-only checks, no app or browser
+    if not history_only:
+        try:
+            # Launch baseline environment
+            console.print("Launching isolated baseline environment...")
+            base_env = env_mgr.launch_environment(baseline_sha, label="baseline")
 
-        # Launch proposed environment
-        console.print("Launching isolated proposed environment...")
-        prop_env = env_mgr.launch_environment(proposed_sha, label="proposed")
+            # Launch proposed environment
+            console.print("Launching isolated proposed environment...")
+            prop_env = env_mgr.launch_environment(proposed_sha, label="proposed")
 
-        if not base_env.is_ready or not prop_env.is_ready:
-            err_msg = prop_env.startup_error or base_env.startup_error or "Application failed to become ready"
-            console.print(f"[bold red]Environment startup error:[/bold red] {err_msg}")
-            findings.append(Finding(
-                category="BLOCKED",
-                target="Application Server",
-                before_behavior="Baseline startup" if base_env.is_ready else base_env.startup_error,
-                after_behavior=prop_env.startup_error or "Failed readiness check",
-                expected_behavior="Application starts cleanly on isolated port",
-                actual_result=err_msg,
-                confidence=1.0,
-                recommended_action="Check application startup configuration in .proofpush.yml",
-                is_critical=True,
-            ))
-        else:
-            # 6. Route discovery
-            route_discoverer = RouteDiscoverer(
-                repo_path=repo_path,
-                base_routes=cfg.routes.base_routes,
-                excluded_routes=cfg.routes.excluded_routes,
-            )
-            base_routes = route_discoverer.discover_source_routes(base_env.worktree_path)
-            prop_routes = route_discoverer.discover_source_routes(prop_env.worktree_path)
-            all_routes = sorted(list(set(base_routes) | set(prop_routes)))
+            if not base_env.is_ready or not prop_env.is_ready:
+                err_msg = prop_env.startup_error or base_env.startup_error or "Application failed to become ready"
+                console.print(f"[bold red]Environment startup error:[/bold red] {err_msg}")
+                findings.append(Finding(
+                    category="BLOCKED",
+                    target="Application Server",
+                    before_behavior="Baseline startup" if base_env.is_ready else base_env.startup_error,
+                    after_behavior=prop_env.startup_error or "Failed readiness check",
+                    expected_behavior="Application starts cleanly on isolated port",
+                    actual_result=err_msg,
+                    confidence=1.0,
+                    recommended_action="Check application startup configuration in .proofpush.yml",
+                    is_critical=True,
+                ))
+            elif not (base_env.frontend and prop_env.frontend):
+                # No web app to run (no start_command, no index.html): git-only checks apply
+                console.print("[dim]No web app detected; skipping browser checks.[/dim]")
+            else:
+                # 6. Route discovery
+                route_discoverer = RouteDiscoverer(
+                    repo_path=repo_path,
+                    base_routes=cfg.routes.base_routes,
+                    excluded_routes=cfg.routes.excluded_routes,
+                )
+                base_routes = route_discoverer.discover_source_routes(base_env.worktree_path)
+                prop_routes = route_discoverer.discover_source_routes(prop_env.worktree_path)
+                all_routes = sorted(list(set(base_routes) | set(prop_routes)))
 
-            if cfg.audit_level == "quick" and len(all_routes) > 5:
-                # Prioritize root, task-related routes, and modified routes
-                quick_routes = [r for r in all_routes if r == "/" or any(w in r.lower() for w in task_context.title.lower().split())]
-                all_routes = (quick_routes + all_routes)[:5]
+                if cfg.audit_level == "quick" and len(all_routes) > 5:
+                    # Prioritize root, task-related routes, and modified routes
+                    quick_routes = [r for r in all_routes if r == "/" or any(w in r.lower() for w in task_context.title.lower().split())]
+                    all_routes = (quick_routes + all_routes)[:5]
 
-            # 7. Browser comparison execution
-            base_url_b = base_env.frontend.base_url if base_env.frontend else "http://127.0.0.1:3000"
-            base_url_p = prop_env.frontend.base_url if prop_env.frontend else "http://127.0.0.1:3100"
+                # 7. Browser comparison execution
+                base_url_b = base_env.frontend.base_url
+                base_url_p = prop_env.frontend.base_url
 
-            browser_engine = BrowserEngine(headless=True)
-            vis_comparator = VisualComparator(
-                diff_threshold=cfg.visual.diff_threshold,
-                reports_dir=repo_path / ".proofpush" / "reports"
-            )
-            classifier = RegressionClassifier(task_context)
+                browser_engine = BrowserEngine(headless=True)
+                vis_comparator = VisualComparator(
+                    diff_threshold=cfg.visual.diff_threshold,
+                    reports_dir=repo_path / ".proofpush" / "reports"
+                )
+                classifier = RegressionClassifier(task_context)
 
-            async def run_browser_audit():
-                nonlocal routes_checked_count, workflows_checked_count
-                # Audit routes
-                for r in all_routes:
-                    routes_checked_count += 1
-                    base_visit = await browser_engine.visit_page(base_url_b, r, capture_screenshot=cfg.visual.enabled)
-                    prop_visit = await browser_engine.visit_page(base_url_p, r, capture_screenshot=cfg.visual.enabled)
+                async def run_browser_audit():
+                    nonlocal routes_checked_count, workflows_checked_count
+                    # Audit routes
+                    for r in all_routes:
+                        routes_checked_count += 1
+                        base_visit = await browser_engine.visit_page(base_url_b, r, capture_screenshot=cfg.visual.enabled)
+                        prop_visit = await browser_engine.visit_page(base_url_p, r, capture_screenshot=cfg.visual.enabled)
 
-                    vis_res = None
-                    if cfg.visual.enabled and base_visit.screenshot_bytes and prop_visit.screenshot_bytes:
-                        vis_res = vis_comparator.compare_images(
-                            baseline_bytes=base_visit.screenshot_bytes,
-                            proposed_bytes=prop_visit.screenshot_bytes,
+                        vis_res = None
+                        if cfg.visual.enabled and base_visit.screenshot_bytes and prop_visit.screenshot_bytes:
+                            vis_res = vis_comparator.compare_images(
+                                baseline_bytes=base_visit.screenshot_bytes,
+                                proposed_bytes=prop_visit.screenshot_bytes,
+                                route=r,
+                                viewport_name="desktop",
+                            )
+                            visual_results.append(vis_res)
+
+                        f = classifier.classify_route_visit(
                             route=r,
-                            viewport_name="desktop",
+                            base_result=base_visit,
+                            prop_result=prop_visit,
+                            visual_result=vis_res,
                         )
-                        visual_results.append(vis_res)
+                        findings.append(f)
 
-                    f = classifier.classify_route_visit(
-                        route=r,
-                        base_result=base_visit,
-                        prop_result=prop_visit,
-                        visual_result=vis_res,
-                    )
-                    findings.append(f)
+                    # Audit workflows
+                    for wf in cfg.workflows:
+                        workflows_checked_count += 1
+                        base_wf_res = await browser_engine.execute_workflow(base_url_b, wf)
+                        prop_wf_res = await browser_engine.execute_workflow(base_url_p, wf)
+                        wf_finding = classifier.classify_workflow(base_wf_res, prop_wf_res, guard=wf.guard)
+                        findings.append(wf_finding)
 
-                # Audit workflows
-                for wf in cfg.workflows:
-                    workflows_checked_count += 1
-                    base_wf_res = await browser_engine.execute_workflow(base_url_b, wf)
-                    prop_wf_res = await browser_engine.execute_workflow(base_url_p, wf)
-                    wf_finding = classifier.classify_workflow(base_wf_res, prop_wf_res, guard=wf.guard)
-                    findings.append(wf_finding)
+                # Run async browser checks
+                try:
+                    asyncio.run(run_browser_audit())
+                except Exception as exc:
+                    findings.append(Finding(
+                        category="BLOCKED",
+                        target="Browser Engine",
+                        before_behavior="Browser checks not run",
+                        after_behavior="Browser checks not run",
+                        expected_behavior="Headless Chromium launches",
+                        actual_result=str(exc).splitlines()[0],
+                        confidence=1.0,
+                        recommended_action="Run `python3 -m playwright install chromium` (or `proofpush doctor`).",
+                        is_critical=True,
+                    ))
 
-            # Run async browser checks
-            asyncio.run(run_browser_audit())
-
-    finally:
-        # Ensure cleanup runs ALWAYS
-        env_mgr.cleanup()
+        finally:
+            # Ensure cleanup runs ALWAYS
+            env_mgr.cleanup()
 
     # 8. AI synthesis (deterministic local by default)
     ai_adapter = get_ai_adapter(cfg.ai)
@@ -377,14 +411,12 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
 
     console.print(f"[dim]Evidence saved:[/dim] [cyan]{saved_paths['html']}[/cyan]")
 
-    # Exit with policy decision code
-    sys.exit(decision.exit_code)
+    return decision.exit_code
 
 
 @main.group()
 def baseline():
     """Manage application baselines."""
-    pass
 
 
 @baseline.command(name="capture")

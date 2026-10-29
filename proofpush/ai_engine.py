@@ -94,7 +94,7 @@ class OpenAIAdapter(BaseAIAdapter):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 return data["choices"][0]["message"]["content"].strip()
-        except Exception as exc:
+        except Exception:
             # Graceful fallback to deterministic engine
             return f"[OpenAI fallback] {LocalRuleEngine().synthesize_summary(task_title, findings)}"
 

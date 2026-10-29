@@ -223,10 +223,12 @@ application:
 | `proofpush review` | Manually runs an audit on your pending commits |
 | `proofpush review --full` | Runs a comprehensive audit (multi-viewport, full crawl) |
 | `proofpush review --mode strict` | Forces strict blocking mode |
+| `proofpush review --history-only` | Git-only checks (reverted past fixes, secrets), no app or browser |
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
 | `proofpush test` | Runs the built-in 33-scenario test suite |
+| `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
 ---

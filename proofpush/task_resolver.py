@@ -13,10 +13,11 @@ Includes protection against prompt injection in commit messages and task descrip
 from __future__ import annotations
 
 import os
+import sys
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Tuple
 
 # Pattern detection for prompt injection attempts
 PROMPT_INJECTION_PATTERNS = [

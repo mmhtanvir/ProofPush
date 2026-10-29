@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
 from proofpush.classifier import Finding
-from proofpush.utils import run_command
+from proofpush.utils import redact_secrets, run_command
 
 FIX_PATTERNS = ["fix", "bug", "hotfix", "regression", "patch", "crash", "broken"]
 # Limit: scans the last 300 fix commits touching the pushed files; raise if old fixes get missed
@@ -119,7 +119,7 @@ class FixHistoryGuard:
                 actual_result="Previously fixed bug likely reintroduced" if reverted else "Code a previous fix removed is back",
                 confidence=round((back + gone) / 2, 2),
                 recommended_action=f"Check whether this push undoes '{subject}'. Re-apply the fix if so.",
-                reproduction_steps=[f"git show {sha[:10]}"] + [f"+ {l}" for l in reintroduced[:3]] + [f"- {l}" for l in undone[:3]],
+                reproduction_steps=[f"git show {sha[:10]}"] + [redact_secrets(f"+ {l}") for l in reintroduced[:3]] + [redact_secrets(f"- {l}") for l in undone[:3]],
                 is_critical=reverted,
             ))
         return findings
