@@ -213,6 +213,7 @@ class EnvironmentManager:
         proc_env["BASE_URL"] = base_url
         proc_env["DATABASE_URL"] = database_url or f"sqlite:///{db_path}"
         proc_env["PROOFPUSH_RUNNING"] = "1"
+        proc_env.setdefault("PYTHONUNBUFFERED", "1")  # Python apps' output reaches the log at once (startup diagnostics)
         if backend_port:
             proc_env["BACKEND_URL"] = f"http://127.0.0.1:{backend_port}"
             proc_env["API_URL"] = f"http://127.0.0.1:{backend_port}"
@@ -294,6 +295,10 @@ class EnvironmentManager:
         else:
             log_content = log_path.read_text(encoding="utf-8", errors="ignore")[-2000:]
             listening = "something is listening on the port" if is_port_open(port) else "nothing is listening on the port"
+            if sys.platform != "win32":
+                # What the app's processes are doing (running, sleeping, stuck) - the session id is the shell's pid
+                ps = run_command(["ps", "-o", "pid,stat,etime,command", "-g", str(proc.pid)], timeout=5)[1].strip()
+                listening += f"; processes:\n{ps[:800]}"
             instance.error_message = (f"Health check timed out after {service_cfg.health_timeout}s on {health_url} "
                                       f"(last error: {last_error}; {listening}). Log:\n{log_content}")
 
