@@ -91,6 +91,8 @@ class EnvironmentManager:
             return None, "application.database: postgres needs Docker or Podman, which isn't installed"
         self._reap_orphans(docker)
         name = f"proofpush-{label}-{os.getpid()}-{uuid.uuid4().hex[:8]}"  # unique even for same-millisecond launches
+        # Tracked before `docker run` returns: an interruption (Ctrl-C, SIGTERM) during the run must still remove it
+        self._containers.append((docker, name))
         # Port chosen by Docker (127.0.0.1::5432): concurrent ProofPush runs can't race for the same host port
         code, out, err = run_command([docker, "run", "-d", "--rm", "--name", name,
                                       "--label", "proofpush.disposable=1", "--label", f"proofpush.owner_pid={os.getpid()}",
@@ -99,14 +101,16 @@ class EnvironmentManager:
                                      timeout=300)
         if code != 0:
             return None, f"Could not start a disposable PostgreSQL ({(err or out).strip()[:200]}). Is Docker running and the image available?"
-        self._containers.append((docker, name))
         mapped = run_command([docker, "port", name, "5432/tcp"], timeout=15)[1].strip().splitlines()
         port = mapped[0].rsplit(":", 1)[-1] if mapped else ""
         if not port.isdigit():
             return None, f"The disposable PostgreSQL started but its port could not be read ({mapped})"
         deadline = time.time() + 60
         while time.time() < deadline:
-            if run_command([docker, "exec", name, "pg_isready", "-U", "proofpush", "-d", "proofpush"], timeout=10)[0] == 0:
+            # Over TCP: the image's first-start init server listens only on the Unix socket and then restarts,
+            # so a socket check can say "ready" just before the real server comes up (the app's connection then breaks)
+            if run_command([docker, "exec", name, "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "proofpush",
+                            "-d", "proofpush"], timeout=10)[0] == 0:
                 return f"postgresql://proofpush:proofpush@127.0.0.1:{port}/proofpush", None
             time.sleep(0.5)
         return None, "The disposable PostgreSQL did not become ready within 60 s"
