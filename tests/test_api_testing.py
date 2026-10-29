@@ -265,7 +265,7 @@ class TestApiTesting(GitRepoTestCase):
                         'if [ "$1" = port ]; then echo 127.0.0.1:55432; fi\nexit 0\n')
         fake.chmod(0o755)
         self.commit_file("app.py", "import http.server, os\nopen('db.txt', 'w').write(os.environ['DATABASE_URL'])\n"
-                         "http.server.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), http.server.SimpleHTTPRequestHandler).serve_forever()\n", "app")
+                         "from proofpush.static_server import make_server\nmake_server(int(os.environ['PORT'])).serve_forever()\n", "app")
         cfg = ApplicationConfig(start_command=f'"{sys.executable}" app.py', database="postgres", health_timeout=15)
         path = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
         with mock.patch.dict(os.environ, {"PATH": path, "FAKE_DOCKER_LOG": str(log)}):

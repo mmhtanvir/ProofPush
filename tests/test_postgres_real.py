@@ -65,7 +65,8 @@ class H(http.server.BaseHTTPRequestHandler):
         db.run("INSERT INTO notes (body) VALUES (:b)", b=body)
         self.send(201, {"ok": True})
 
-http.server.HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+from proofpush.static_server import LoopbackServer
+LoopbackServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
 '''
 
 

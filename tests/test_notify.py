@@ -11,7 +11,7 @@ import os
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +24,7 @@ except ImportError:
     from test_helpers import GitRepoTestCase
 from proofpush import notifier
 from proofpush.config import NotifyConfig
+from proofpush.static_server import LoopbackServer
 from proofpush.utils import AGENT_ENV_VARS
 
 
@@ -50,7 +51,7 @@ class TestNotify(GitRepoTestCase):
             def log_message(self, *a):
                 pass
 
-        server = HTTPServer(("127.0.0.1", 0), Hook)
+        server = LoopbackServer(("127.0.0.1", 0), Hook)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         (self.local_dir / ".proofpush").mkdir()
         (self.local_dir / ".proofpush" / "secrets.env").write_text(f"TEAM_HOOK=http://127.0.0.1:{server.server_port}/hook\n")

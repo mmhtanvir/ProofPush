@@ -9,7 +9,7 @@ import asyncio
 import json
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -20,6 +20,7 @@ try:
 except ImportError:
     from test_helpers import GitRepoTestCase
 from proofpush.browser_engine import BrowserEngine, api_key
+from proofpush.static_server import LoopbackServer
 from proofpush.classifier import RegressionClassifier
 from proofpush.task_resolver import TaskContext
 
@@ -60,7 +61,7 @@ def serve(routes):
 
         do_GET = do_POST = reply
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LoopbackServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 

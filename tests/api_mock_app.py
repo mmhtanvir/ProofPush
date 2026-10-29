@@ -6,7 +6,9 @@ Run as an app: PORT=8000 python api_mock_app.py   (VARIANT can be edited in plac
 import json
 import os
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
+from proofpush.static_server import LoopbackServer  # no reverse-DNS lookup before listening (slow on macOS CI)
 from urllib.parse import parse_qs, urlparse
 
 VARIANT = "good"
@@ -124,11 +126,11 @@ class VariantHandler(Handler):
         super().handle_one_request()
 
 
-def serve_variant(variant: str) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), VariantHandler)
+def serve_variant(variant: str) -> LoopbackServer:
+    server = LoopbackServer(("127.0.0.1", 0), VariantHandler)
     VARIANT_BY_SERVER[server.server_port] = variant
     return server
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("PORT", "8000"))), Handler).serve_forever()
+    LoopbackServer(("127.0.0.1", int(os.environ.get("PORT", "8000"))), Handler).serve_forever()

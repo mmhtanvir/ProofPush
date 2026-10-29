@@ -145,17 +145,15 @@ def urlopen(req, timeout: float):
 
 
 def find_free_port(start: int = 3100, max_tries: int = 100) -> int:
-    """Find an available TCP port starting from start."""
-    for port in range(start, start + max_tries):
-        if is_port_open(port):
-            continue
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(('127.0.0.1', port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError(f"Could not find an available port in range {start}-{start + max_tries}")
+    """A free TCP port on 127.0.0.1, assigned by the OS.
+
+    Scanning upward from a fixed number made concurrent ProofPush runs pick the same port (and the second app
+    crashed with "address already in use"); the OS hands out distinct ephemeral ports instead. `start` and
+    `max_tries` are kept for compatibility.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def is_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:

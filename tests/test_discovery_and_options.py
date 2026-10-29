@@ -75,3 +75,19 @@ class TestDiscoveryAndOptions(GitRepoTestCase):
         masked = Image.open(io.BytesIO(asyncio.run(shot(mask_selectors=[".timestamp"])).screenshot_bytes)).convert("RGB").getpixel((10, 10))
         self.assertEqual(plain, (255, 0, 0))
         self.assertNotEqual(masked, (255, 0, 0))
+
+    def test_scenario_57b_static_server_skips_reverse_dns(self):
+        """http.server's socket.getfqdn() delayed listening by 15-30 s on macOS CI; ProofPush's server must not call it."""
+        import socket
+        import threading
+        import urllib.request
+        from unittest import mock
+        from proofpush.static_server import make_server
+        (self.local_dir / "index.html").write_text("<h1>ok</h1>")
+        with mock.patch.object(socket, "getfqdn", side_effect=AssertionError("reverse DNS lookup")):
+            server = make_server(0, str(self.local_dir))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/", timeout=5) as r:
+            self.assertIn(b"ok", r.read())

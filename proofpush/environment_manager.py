@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+import uuid
 import signal
 import shutil
 import tempfile
@@ -89,7 +90,7 @@ class EnvironmentManager:
         if not docker:
             return None, "application.database: postgres needs Docker or Podman, which isn't installed"
         self._reap_orphans(docker)
-        name = f"proofpush-{label}-{os.getpid()}-{int(time.time() * 1000) % 100000}"
+        name = f"proofpush-{label}-{os.getpid()}-{uuid.uuid4().hex[:8]}"  # unique even for same-millisecond launches
         # Port chosen by Docker (127.0.0.1::5432): concurrent ProofPush runs can't race for the same host port
         code, out, err = run_command([docker, "run", "-d", "--rm", "--name", name,
                                       "--label", "proofpush.disposable=1", "--label", f"proofpush.owner_pid={os.getpid()}",
@@ -168,7 +169,8 @@ class EnvironmentManager:
             # Check if there is an index.html in the worktree
             if (worktree / "index.html").is_file():
                 # This interpreter (Windows has no `python3`), loopback only (not reachable from the network)
-                start_cmd = f'"{sys.executable}" -m http.server $PORT --bind 127.0.0.1'
+                # (http.server's reverse-DNS lookup can delay listening by 30 s+ on some Macs: see static_server.py)
+                start_cmd = f'"{sys.executable}" -m proofpush.static_server $PORT'
             else:
                 # No server needed or no start command provided
                 env.is_ready = True
@@ -225,6 +227,7 @@ class EnvironmentManager:
         db_path: Path,
         backend_port: Optional[int] = None,
         database_url: Optional[str] = None,
+        _retried: bool = False,
     ) -> ServiceInstance:
         """Launch a service process and wait for readiness."""
         base_url = f"http://127.0.0.1:{port}"
@@ -294,6 +297,11 @@ class EnvironmentManager:
             ret = proc.poll()
             if ret is not None:
                 log_content = log_path.read_text(encoding="utf-8", errors="ignore")[-2000:]
+                if not _retried and re.search(r"address already in use|EADDRINUSE|port .* (is )?(already )?in use", log_content, re.I):
+                    # Another process took the port between allocation and bind: once more on a fresh port
+                    log_f.close()
+                    return self._start_service(name, service_cfg, find_free_port(), cwd, db_path, backend_port,
+                                               database_url, _retried=True)
                 instance.error_message = f"Process terminated prematurely with code {ret}. Log:\n{log_content}"
                 return instance
 
