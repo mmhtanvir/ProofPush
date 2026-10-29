@@ -137,3 +137,10 @@ report_retention: 30
 #   auto_click: true
 #   max_per_page: 8
 #   max_pages: 10
+
+# API payload tests: same requests to old and new version (see README "API Payload Testing")
+# api_tests:
+#   mode: affected            # off | smoke | affected | full
+#   allow_writes: false
+#   cases:
+#     - {name: health, path: /api/health, prod: true, expect: {status: 200}}

@@ -7,6 +7,7 @@ monitors readiness/health, manages process lifecycles, and cleans up temporary r
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import signal
@@ -47,6 +48,7 @@ class AppEnvironment:
     startup_error: Optional[str] = None
 
 
+MIGRATION_COMMAND = re.compile(r"\bmigrate\b|alembic\s+upgrade|prisma\s+(migrate|db\s+push)|knex\s+migrate|db:migrate|sequelize\s+db:migrate|flyway\s+migrate|goose\s+up", re.I)
 DEPENDENCY_DIRS = ("node_modules", ".venv", "venv", "env", "vendor", ".bundle")
 
 
@@ -190,6 +192,15 @@ class EnvironmentManager:
 
         # Substitute $PORT in start command
         cmd_str = service_cfg.start_command.replace("$PORT", str(port))
+
+        # Never run a candidate's migrations against a shared/production database
+        if MIGRATION_COMMAND.search(cmd_str):
+            from proofpush.api_testing import read_env_files, remote_database
+            db = remote_database({**read_env_files(cwd), **proc_env})
+            if db:
+                instance.error_message = (f"Refused to start: the start command runs migrations and the app's database is "
+                                          f"not local ({db}). Use a local/disposable database for audits.")
+                return instance
 
         log_path = cwd / f"{name}.log"
         instance.log_file = log_path

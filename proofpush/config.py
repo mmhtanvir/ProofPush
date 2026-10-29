@@ -9,7 +9,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from proofpush.utils import exclude_from_git
@@ -157,6 +157,26 @@ class TestsConfig:
     enabled: bool = False
     command: str = ""  # default: detected (npm test, pytest, manage.py test, go test, cargo test)
     timeout: int = 600
+    allow_remote_database: bool = False  # run even if the app's env points at a non-local database
+
+
+@dataclass
+class ApiTestsConfig:
+    """Endpoint discovery + generated/explicit requests sent to baseline and candidate (see api_testing.py)."""
+    mode: str = "off"  # off | smoke | affected | full
+    openapi: str = ""  # file in the repo, URL path on the app (/openapi.json) or full URL; default: auto
+    sources: List[str] = field(default_factory=lambda: ["openapi", "framework", "traffic"])
+    include: List[str] = field(default_factory=list)  # path prefixes to test (empty: all)
+    exclude: List[str] = field(default_factory=list)  # path prefixes never to test
+    cases: List[Dict[str, Any]] = field(default_factory=list)  # explicit requests + expectations
+    allow_writes: bool = False  # POST/PUT/PATCH/DELETE on local/staging (production: see environments)
+    normalize_fields: List[str] = field(default_factory=list)  # field names whose values may differ (ids, tokens)
+    max_requests: int = 200
+    rate_per_second: float = 10.0
+    timeout: float = 10.0
+    max_body_bytes: int = 1_000_000
+    max_invalid_per_endpoint: int = 4
+    auth: Dict[str, Dict[str, str]] = field(default_factory=dict)  # environment -> headers ({NAME} from secrets)
 
 
 @dataclass
@@ -185,6 +205,10 @@ class AuditorConfig:
     # Headers sent with every request, e.g. {"Authorization": "Bearer {API_TOKEN}"}; {NAME} is read like other secrets
     api_headers: Dict[str, str] = field(default_factory=dict)
     tests: TestsConfig = field(default_factory=TestsConfig)
+    api_tests: ApiTestsConfig = field(default_factory=ApiTestsConfig)
+    # Per environment: local | staging | production (default production: most conservative) and writes allowed
+    environment_types: Dict[str, str] = field(default_factory=dict)
+    environment_writes: Dict[str, bool] = field(default_factory=dict)
     report_retention: int = 30
 
 
@@ -378,11 +402,31 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
             name: (env.get("url", "") if isinstance(env, dict) else str(env))
             for name, env in raw["environments"].items()
         }
+        for name, env in raw["environments"].items():
+            env_type = str(env.get("type", "production")).lower() if isinstance(env, dict) else "production"
+            config.environment_types[name] = env_type if env_type in ("local", "staging", "production") else "production"
+            # allow_writes on a live environment = an isolated test tenant whose data may change
+            config.environment_writes[name] = bool(env.get("allow_writes", False)) if isinstance(env, dict) else False
+
+    if isinstance(raw.get("api_tests"), dict):
+        a = raw["api_tests"]
+        d = ApiTestsConfig()
+        config.api_tests = ApiTestsConfig(
+            mode=str(a.get("mode", d.mode)).lower(), openapi=str(a.get("openapi") or ""),
+            sources=list(a.get("sources") or d.sources), include=list(a.get("include") or []),
+            exclude=list(a.get("exclude") or []), cases=[c for c in a.get("cases") or [] if isinstance(c, dict)],
+            allow_writes=bool(a.get("allow_writes", False)), normalize_fields=list(a.get("normalize_fields") or []),
+            max_requests=int(a.get("max_requests", d.max_requests)), rate_per_second=float(a.get("rate_per_second", d.rate_per_second)),
+            timeout=float(a.get("timeout", d.timeout)), max_body_bytes=int(a.get("max_body_bytes", d.max_body_bytes)),
+            max_invalid_per_endpoint=int(a.get("max_invalid_per_endpoint", d.max_invalid_per_endpoint)),
+            auth={str(k): {str(h): str(v) for h, v in (hv or {}).items()} for k, hv in (a.get("auth") or {}).items()},
+        )
 
     if isinstance(raw.get("tests"), dict):
         t = raw["tests"]
         config.tests = TestsConfig(enabled=bool(t.get("enabled", False)), command=str(t.get("command") or ""),
-                                   timeout=int(t.get("timeout", 600)))
+                                   timeout=int(t.get("timeout", 600)),
+                                   allow_remote_database=bool(t.get("allow_remote_database", False)))
 
     if isinstance(raw.get("api_headers"), dict):
         config.api_headers = {str(k): str(v) for k, v in raw["api_headers"].items()}

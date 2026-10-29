@@ -12,7 +12,7 @@ import asyncio
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
 import click
 from rich.console import Console
@@ -26,7 +26,7 @@ from proofpush.baseline_manager import BaselineManager, BaselineMetadata
 from proofpush.environment_manager import EnvironmentManager
 from proofpush.route_discoverer import RouteDiscoverer
 from proofpush.fix_history import FixHistoryGuard
-from proofpush import notifier, push_rules, test_suite
+from proofpush import api_testing, notifier, push_rules, test_suite
 from proofpush.browser_engine import BrowserEngine
 from proofpush.visual_comparator import VisualComparator
 from proofpush.unrelated_analyzer import UnrelatedAnalyzer
@@ -208,11 +208,73 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     sys.exit(max(codes))
 
 
+def _api_headers_for(cfg: AuditorConfig, repo_path: Path, env_name: str, cookies: Optional[list] = None) -> Dict[str, str]:
+    """Credentials for API requests in one environment: api_tests.auth.<env>, else api_headers, plus login cookies."""
+    headers = resolve_headers(repo_path, cfg.api_tests.auth.get(env_name) or cfg.api_headers)
+    if cookies and not any(h.lower() == "cookie" for h in headers):
+        headers["Cookie"] = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+    return headers
+
+
+def _discover(cfg: AuditorConfig, roots: List[Path], app_url: Optional[str], headers: Dict[str, str],
+              traffic: Optional[Dict[str, Dict[str, Any]]] = None):
+    """Endpoints from the configured sources, highest confidence first; returns (endpoints, OpenAPI origin).
+
+    Several roots (baseline + candidate code) are unioned, so an endpoint deleted by the change is still tested.
+    """
+    groups, origin = [], ""
+    sources = cfg.api_tests.sources
+    if "openapi" in sources:
+        for i, root in enumerate(roots):
+            spec, where = api_testing.load_openapi(root, cfg.api_tests.openapi, app_url if i == 0 else None, headers)
+            if spec:
+                groups.append(api_testing.endpoints_from_openapi(spec))
+                origin = origin or where
+    if "framework" in sources:
+        for root in roots:
+            groups.append(api_testing.discover_framework_endpoints(root))
+    if "traffic" in sources and traffic:
+        groups.append(api_testing.endpoints_from_traffic(traffic))
+    endpoints = api_testing.merge_endpoints(*groups)
+    inc, exc = cfg.api_tests.include, cfg.api_tests.exclude
+    endpoints = [e for e in endpoints if (not inc or any(e.path.startswith(p) for p in inc))
+                 and not any(e.path.startswith(p) for p in exc)]
+    return endpoints, origin
+
+
+def _run_api_tests(cfg: AuditorConfig, roots: List[Path], env_name: str, env_type: str, cand_url: str, cand_headers: Dict[str, str],
+                   base_url: Optional[str] = None, base_headers: Optional[Dict[str, str]] = None,
+                   changed_files: Optional[List[str]] = None, traffic=None, remote_db: Optional[str] = None,
+                   allow_writes: Optional[bool] = None) -> List[Finding]:
+    """API payload tests for one environment (and a baseline to compare with, when given)."""
+    opts = cfg.api_tests
+    if opts.mode == "off":
+        return []
+    endpoints, origin = _discover(cfg, roots, base_url or cand_url, cand_headers, traffic)
+    selected = api_testing.select_endpoints(endpoints, opts.mode, changed_files or [])
+    cases = api_testing.cases_from_config(opts.cases)
+    if env_type != "production":  # generated (and invalid) requests never go to production
+        cases += api_testing.generate_cases(selected, opts.max_invalid_per_endpoint, auth_configured=bool(cand_headers))
+    policy = api_testing.Policy(env_type=env_type, remote_database=remote_db,
+                                allow_writes=opts.allow_writes if allow_writes is None else allow_writes)
+    limits = api_testing.RunLimits(opts.max_requests, opts.rate_per_second, opts.timeout, opts.max_body_bytes)
+    console.print(f"API tests ({opts.mode}, {env_type}): {len(endpoints)} endpoint(s) discovered"
+                  + (f" incl. OpenAPI from {origin}" if origin else "") + f", {len(cases)} case(s)", markup=False)
+    outcomes = api_testing.run_suite(cases, policy, limits, cand_url, cand_headers, base_url, base_headers,
+                                     opts.normalize_fields)
+    return api_testing.to_findings(outcomes, len(endpoints), f"{env_name} ({env_type})")
+
+
 def _compare_test_suites(cfg: AuditorConfig, base_dir: Path, prop_dir: Path) -> List[Finding]:
     """The project's own tests on both versions (backend logic included): newly failing tests are regressions."""
     if not cfg.tests.enabled:
         return []
     command = cfg.tests.command or test_suite.detect_test_command(prop_dir)
+    # Test runners create/flush databases: refuse when the app's settings point at a shared or production one
+    db = api_testing.remote_database({**api_testing.read_env_files(prop_dir), **os.environ})
+    if db and not cfg.tests.allow_remote_database:
+        return [_blocked("Test suite", f"Not run: the app's environment points at a non-local database ({db}). "
+                                       "Point tests at a local/disposable database, or set tests.allow_remote_database if that is safe.")]
     if not command:
         return [_blocked("Test suite", "tests.enabled is on but no test command was found; set tests.command")]
     console.print(f"Running the project's tests on both versions: {command}", markup=False)
@@ -376,6 +438,16 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
         except Exception as exc:
             findings.append(_blocked("Browser Engine", str(exc).splitlines()[0]))
 
+        if cfg.api_tests.mode != "off":
+            # OpenAPI is read from the live deployment first, so endpoints the candidate dropped are still tested
+            findings.extend(_run_api_tests(
+                cfg, [repo_path], env_name, cfg.environment_types.get(env_name, "production"), candidate_url,
+                _api_headers_for(cfg, repo_path, env_name, (engine.sessions.get(candidate_url) or {}).get("cookies")),
+                base_url, _api_headers_for(cfg, repo_path, env_name, (engine.sessions.get(base_url) or {}).get("cookies")),
+                changed_files=run_command(["git", "diff", "--name-only", base_sha, candidate_sha], cwd=repo_path)[1].split(),
+                allow_writes=cfg.environment_writes.get(env_name, False),
+            ))
+
     decision = PolicyEnforcer("strict", cfg.policies, cfg.security).evaluate(findings=findings, security_result=security_res, is_tty=False)
     report = AuditReportData(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), repo_path=str(repo_path),
@@ -493,7 +565,14 @@ def check(env_name: str):
     except Exception as exc:
         findings.append(_blocked("Browser Engine", str(exc).splitlines()[0]))
 
-    failed = [f for f in findings if f.category != "UNCHANGED"]
+    if cfg.api_tests.mode != "off":
+        cookies = (engine.sessions.get(base_url) or {}).get("cookies")
+        findings.extend(_run_api_tests(
+            cfg, [repo_path], env_name, cfg.environment_types.get(env_name, "production"), base_url,
+            _api_headers_for(cfg, repo_path, env_name, cookies), allow_writes=cfg.environment_writes.get(env_name, False),
+        ))
+
+    failed = [f for f in findings if f.category in ("REGRESSION", "POSSIBLE_REGRESSION", "REMOVED_FUNCTIONALITY", "BLOCKED")]
     report = AuditReportData(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), repo_path=str(repo_path),
         baseline_sha="live", proposed_sha=env_name, task_title=f"Live check: {env_name} ({base_url})",
@@ -742,6 +821,7 @@ def _audit_update(
                                         route=at(r, vp), base_result=before, prop_result=after, visual_result=vis_res))
                             # Backend calls behind the page (first screen size is enough: same calls at every size)
                             if vp is first:
+                                observed_calls.update(before.api_calls)
                                 api_finding = classifier.classify_api(r, before.api_calls, after.api_calls)
                                 if api_finding:
                                     findings.append(api_finding)
@@ -769,11 +849,13 @@ def _audit_update(
                     finally:
                         await browser_engine.close()
 
+                observed_calls: Dict[str, Dict[str, Any]] = {}
                 try:
                     asyncio.run(run_and_close())
                 except Exception as exc:
+                    no_extra = "browser extra" in str(exc) and cfg.api_tests.mode != "off"
                     findings.append(Finding(
-                        category="BLOCKED",
+                        category="NOTICE" if no_extra else "BLOCKED",
                         target="Browser Engine",
                         before_behavior="Browser checks not run",
                         after_behavior="Browser checks not run",
@@ -781,7 +863,23 @@ def _audit_update(
                         actual_result=str(exc).splitlines()[0],
                         confidence=1.0,
                         recommended_action="pip install 'proofpush[browser]' && python3 -m playwright install chromium (or `proofpush doctor`).",
-                        is_critical=True,
+                        is_critical=not no_extra,
+                    ))
+
+                # API payload tests against both running versions (independent of the browser stage)
+                if cfg.api_tests.mode != "off":
+                    def api_url(env):
+                        return (env.backend or env.frontend).base_url
+                    def cookies(url):
+                        return (browser_engine.sessions.get(url) or {}).get("cookies")
+                    app_env = {**api_testing.read_env_files(prop_env.worktree_path), **cfg.application.env}
+                    changed = run_command(["git", "diff", "--name-only", baseline_sha, proposed_sha], cwd=repo_path)[1].split()
+                    findings.extend(_run_api_tests(
+                        cfg, [base_env.worktree_path, prop_env.worktree_path], "local", "local",
+                        api_url(prop_env), _api_headers_for(cfg, repo_path, "local", cookies(api_url(prop_env))),
+                        api_url(base_env), _api_headers_for(cfg, repo_path, "local", cookies(api_url(base_env))),
+                        changed_files=changed, traffic=observed_calls,
+                        remote_db=api_testing.remote_database(app_env),
                     ))
 
         finally:
@@ -856,6 +954,31 @@ def _audit_update(
         )
 
     return decision.exit_code
+
+
+@main.group()
+def api():
+    """API endpoint discovery and payload testing (configured under api_tests in .proofpush.yml)."""
+
+
+@api.command("discover")
+@click.option("--url", default=None, help="Running app to read the OpenAPI schema from (e.g. http://localhost:8000)")
+@click.option("--env", "env_name", default="local", help="Credentials (api_tests.auth.<env> / api_headers) for --url")
+def api_discover(url: Optional[str], env_name: str):
+    """List the endpoints ProofPush can find, where each came from, and how confident that is."""
+    repo_path = Path.cwd().resolve()
+    cfg = load_config(repo_path)
+    endpoints, origin = _discover(cfg, [repo_path], url, _api_headers_for(cfg, repo_path, env_name))
+    table = Table(title=f"{len(endpoints)} endpoint(s)" + (f" (OpenAPI: {origin})" if origin else " (no OpenAPI schema found)"))
+    for col in ("Method", "Path", "Source", "Confidence", "Body schema", "Auth"):
+        table.add_column(col)
+    for e in sorted(endpoints, key=lambda e: (e.path, e.method)):
+        table.add_row(e.method, e.path, e.source + (f" ({e.source_file})" if e.source_file else ""), f"{e.confidence:.0%}",
+                      "yes" if e.body_schema else "-", {True: "required", False: "public"}.get(e.requires_auth, "unknown"))
+    console.print(table)
+    if not origin:
+        console.print("Without an OpenAPI schema, request bodies can't be generated: only GET routes and your api_tests.cases "
+                      "are fully testable. FastAPI serves one at /openapi.json; for DRF add drf-spectacular.", markup=False)
 
 
 @main.group()

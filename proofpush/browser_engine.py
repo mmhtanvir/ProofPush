@@ -209,6 +209,12 @@ async def _record_api_call(req, into: Dict[str, Dict[str, Any]]) -> None:
     if req.resource_type == "document" and "json" not in (resp.headers.get("content-type") or ""):
         return  # HTML pages are judged by the page checks; JSON routes (API-only backends) are API calls
     call = {"status": resp.status, "ms": round(req.timing.get("responseEnd", 0) or 0)}
+    if req.method == "GET":
+        # A concrete, known-good URL the API tests can replay (sensitive query values masked)
+        parsed = urlparse(req.url)
+        query = "&".join(f"{k}={'***' if re.search(r'token|key|secret|pass|session|auth', k, re.I) else v[0]}"
+                         for k, v in parse_qs(parsed.query).items())
+        call["sample"] = parsed.path + (f"?{query}" if query else "")
     if "json" in (resp.headers.get("content-type") or ""):
         try:
             call.update(json_shape(await resp.json()))

@@ -48,7 +48,8 @@ class RegressionClassifier:
             return not r or r.status >= 500 or bool(r.error_message and "ERR_" in r.error_message)
 
         # Case 0: Already broken before this change: worth knowing, not this change's fault
-        if base_result and crashed(base_result) and crashed(prop_result):
+        same_error = bool(base_result and prop_result and base_result.status >= 400 and base_result.status == prop_result.status)
+        if base_result and (same_error or (crashed(base_result) and crashed(prop_result))):
             return Finding(
                 category="NOTICE",
                 target=route,

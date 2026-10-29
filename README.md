@@ -265,6 +265,106 @@ Each version runs in a temporary checkout with your installed dependencies (`nod
 
 ---
 
+## 🧪 API Payload Testing (backend, any framework)
+
+Turn on `api_tests` and ProofPush sends the **same deterministic requests** to the old and the new version of your API and reports what broke: endpoints that disappeared, validation or auth that stopped working, fields that changed type, business rules that changed, a fixed bug that came back, or a version that stopped answering.
+
+**How endpoints are found** (see them with `proofpush api discover [--url http://localhost:8000]`), most trusted first:
+1. OpenAPI/Swagger: a file in the repo (`openapi.json`, `swagger.yaml`, `schema.yml`, ...) or the running app (`/openapi.json`, DRF `/api/schema/?format=json`, `/v3/api-docs`)
+2. Framework routes: FastAPI, Flask, Django `urls.py` + DRF routers, Express, Next.js route handlers / `pages/api`, Go (`net/http`, chi, gin)
+3. The API calls your frontend really makes during the page checks (concrete, known-good URLs)
+
+Endpoints are discovered from **both** versions, so one the change deletes is still tested. Coverage is always reported: discovered, run, and not run (with the reason).
+
+**Which requests are sent**: your explicit cases first, then for each endpoint a schema-valid request (examples, enums, formats, required fields), invalid ones (missing/null/wrong-type/empty/out-of-range/invalid-enum fields, malformed JSON, wrong query types) and a request without credentials where auth is required.
+
+**What counts as broken**, strongest evidence first:
+
+| Evidence | Example finding |
+|---|---|
+| Your assertion | `previously fixed bug is back: $.total is 2.5, expected 5.0` (a `guard: true` case blocks even if the old version fails too) |
+| API contract (OpenAPI) | `$.items[0].price should be number, got str`, `status 201, expected 401/422` |
+| Input validation | `accepted invalid input (missing required 'name') with 201` |
+| Authentication | `responded 201 without credentials` |
+| Feature removed | `endpoint removed: answered 200 before, now 404` |
+| Server errors | `server error 500`, `candidate did not respond` |
+| Baseline only | `$.total changed 5.0 -> 4.0`: a **potential** regression to confirm, never a confirmed one |
+
+Timestamps and UUIDs are treated as dynamic; prices, statuses and every other value are compared unless you list the field in `normalize_fields`. Failures that also happen on the old version are reported as existing, not blamed on the change. A version that doesn't respond at all is an environment problem, not a regression.
+
+```yaml
+api_tests:
+  mode: affected          # off (default) | smoke (health + a few GETs) | affected (changed endpoints + smoke) | full
+  # openapi: openapi.yaml  # or /openapi.json on the app; default: auto
+  allow_writes: false     # POST/PUT/PATCH/DELETE on local/staging; refused if the app's database isn't local
+  normalize_fields: [id, created_at]
+  max_requests: 200       # per run, both versions together
+  rate_per_second: 10
+  timeout: 10
+  auth:                   # per environment; {NAME} is read from env vars / .proofpush/secrets.env
+    local: {Authorization: "Bearer {LOCAL_API_TOKEN}"}
+    staging: {Authorization: "Bearer {STAGING_API_TOKEN}"}
+  cases:
+    - name: "total uses quantity (bug #12)"
+      guard: true
+      path: /api/cart/total
+      query: {qty: 2}
+      expect: {status: 200, body: {"$.total": 5.0}}
+    - name: create order then read it back
+      steps:
+        - {method: POST, path: /api/orders, json: {sku: PEN, qty: 2}, save: {order_id: "$.id"}, expect: {status: 201}}
+        - {method: GET, path: "/api/orders/{order_id}", expect: {body: {"$.total": 5.0}, fields: [status]}}
+    - name: health
+      path: /api/health
+      prod: true          # approved for production (read-only)
+      expect: {status: 200, max_ms: 800}
+
+environments:
+  staging: {url: https://staging.example.com, type: staging}
+  prod: https://example.com          # a plain URL is treated as production
+```
+
+**Where it runs**
+- `git push` (local mode): both versions run locally from temporary checkouts; generated requests go to both.
+- `proofpush check --env staging`: checks one deployment against your assertions and the contract (no baseline). Generated reads; writes only with `allow_writes`.
+- `proofpush check --env prod`: **read-only and explicit-only**: only cases marked `prod: true`, no generated or invalid requests, no writes unless the environment is an isolated test tenant (`{url: ..., type: production, allow_writes: true}`).
+- `proofpush gate --base-url <live> --candidate-url <preview> --env staging`: live vs candidate with the same policies.
+
+**Safety rules (always on)**
+- Production: approved read-only cases only; never fuzzing, never generated requests, never the project's test suite.
+- Writes need `allow_writes`, and locally they are refused when the app's settings point at a non-local or production database (`DATABASE_URL`, `DB_HOST`, `ENV=production`, ...). ProofPush gives each local version its own `DATABASE_URL=sqlite:///...`, which only isolates apps that read `DATABASE_URL`.
+- Generated writes to payment, email, SMS, webhook, upload or import endpoints are never sent; write an explicit case if you want them tested.
+- An app whose start command runs migrations is not started while its database is non-local; `tests.enabled` refuses to run the project's tests in that situation too (`tests.allow_remote_database` overrides).
+- Tokens, cookies, passwords and sensitive query values are masked in every report.
+
+**Minimal examples**
+
+FastAPI (serves its own OpenAPI schema):
+```yaml
+application:
+  start_command: "uvicorn app.main:app --port $PORT"
+  health_check: /docs
+api_tests:
+  mode: affected
+  auth: {local: {Authorization: "Bearer {LOCAL_API_TOKEN}"}}
+```
+
+Django REST Framework (add `drf-spectacular` for request bodies; without it, routes come from `urls.py` and routers):
+```yaml
+application:
+  start_command: "python manage.py runserver 127.0.0.1:$PORT"
+  health_check: /api/health/
+  env: {DJANGO_SETTINGS_MODULE: config.settings.test}
+api_tests:
+  mode: affected
+  openapi: /api/schema/?format=json
+  auth: {local: {Authorization: "Token {LOCAL_API_TOKEN}"}}
+```
+
+**Not covered yet**: separate users for cross-account access tests, disposable PostgreSQL per version, background jobs/queues, multipart uploads, and AI-proposed payloads. Without an OpenAPI schema, request bodies can't be generated: write explicit `cases` for important write endpoints.
+
+---
+
 ## 📱 Responsive Layout and Load Speed
 
 Every checked page is compared between the old and new version at **each screen size** in `visual.viewports` (desktop and mobile by default; add a tablet with `- {width: 768, height: 1024, name: tablet}`). Only what the new version made worse is reported:
@@ -451,13 +551,14 @@ application:
 | `proofpush review --full` | Runs a comprehensive audit (every viewport, every discovered route; add `routes.crawl` to follow links) |
 | `proofpush review --mode strict` | Forces strict blocking mode |
 | `proofpush gate --base <live> --candidate <new>` | Deployment gate: exit 1 rejects a release that brings back fixed bugs (`--vercel` for Vercel's Ignored Build Step) |
+| `proofpush api discover [--url URL]` | Lists discovered API endpoints, their source and confidence |
 | `proofpush check --env prod` | Logs in with the prod test account and checks every reachable page of the live site (read-only) |
 | `proofpush login --env prod` | Log in by hand once (SMS/email codes, SSO) and save the session for checks |
 | `proofpush review --history-only` | Git-only checks (reverted past fixes, secrets), no app or browser |
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 64-scenario test suite |
+| `proofpush test` | Runs the built-in 74-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -473,11 +574,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 64 real-world developer scenarios:
+ProofPush is tested against 74 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 64 tests in 40s (OK)
+# Ran 74 tests in 46s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.
