@@ -124,7 +124,7 @@ class TestGitAndHooks(GitRepoTestCase):
 
         self.commit_file("index.html", "<h1>Test Store Updated</h1>", "feat: Update store greeting")
         code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir, timeout=300)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 0, (out + err)[-2500:])  # on failure, the hook's "why blocked" summary
 
     def test_scenario_2_simulated_ai_cli_push(self):
         """Scenario 2: Push initiated by an autonomous AI agent CLI without TTY interaction."""
@@ -138,7 +138,7 @@ class TestGitAndHooks(GitRepoTestCase):
         self.commit_file("index.html", "<h1>Store AI Enhanced</h1>", "feat: Agent automated update")
         env_vars = {"CI": "1", "NONINTERACTIVE": "1", "AGENT_CLI": "claude-code"}
         code, out, err = run_command(["git", "push", "origin", "main"], cwd=self.local_dir, env=env_vars, timeout=300)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 0, (out + err)[-2500:])
 
     def test_scenario_25_push_using_no_verify(self):
         """Scenario 25: Pushing with --no-verify cleanly bypasses pre-push hook per Git design."""
