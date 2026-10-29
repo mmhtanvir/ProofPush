@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Checkout - Acme Coffee</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; margin: 2rem; background: #fafafa; }
+        .box { background: white; border: 1px solid #e5e7eb; padding: 2rem; border-radius: 8px; max-width: 500px; }
+        .row { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+        .total { font-size: 1.25rem; font-weight: bold; border-top: 1px solid #e5e7eb; padding-top: 0.5rem; }
+        .coupon-group { display: flex; gap: 0.5rem; margin-top: 1rem; margin-bottom: 1rem; }
+        input { flex: 1; padding: 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.95rem; }
+        .btn-apply { background: #0f172a; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
+        .discount-badge { color: #10b981; font-weight: 500; font-size: 0.9rem; }
+        button#pay-button { background: #3b82f6; color: white; border: none; padding: 0.75rem; width: 100%; border-radius: 4px; font-size: 1rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>Order Summary</h2>
+        <div class="row"><span>Espresso Roast Blend</span><span>$18.00</span></div>
+        <div class="row"><span>Standard Shipping</span><span>$5.00</span></div>
+        <div class="row" id="discount-row" style="display:none; color: #10b981;"><span>Coupon Discount (SAVE10):</span><span id="discount-val">-$2.30</span></div>
+        <div class="row total"><span>Order Total:</span><span id="order-total">$23.00</span></div>
+        
+        <div class="coupon-group">
+            <input type="text" id="coupon-input" placeholder="Enter coupon code" />
+            <button type="button" class="btn-apply" onclick="applyCoupon()">Apply</button>
+        </div>
+        <div id="coupon-status" class="discount-badge"></div>
+        <br>
+        <button id="pay-button" type="button" onclick="alert('Order submitted!')">Place Test Order</button>
+    </div>
+
+    <script>
+        function applyCoupon() {
+            const input = document.getElementById('coupon-input').value.trim();
+            const status = document.getElementById('coupon-status');
+            const total = document.getElementById('order-total');
+            const row = document.getElementById('discount-row');
+
+            if (input === 'SAVE10') {
+                status.innerText = 'Valid coupon: 10% discount applied!';
+                status.style.color = '#10b981';
+                row.style.display = 'flex';
+                total.innerText = '$20.70';
+            } else if (input === '') {
+                status.innerText = 'Please enter a coupon code.';
+                status.style.color = '#ef4444';
+            } else {
+                status.innerText = 'Invalid or expired coupon.';
+                status.style.color = '#ef4444';
+            }
+        }
+    </script>
+</body>
+</html>

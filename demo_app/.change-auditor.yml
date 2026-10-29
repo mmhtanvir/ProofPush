@@ -1,0 +1,32 @@
+mode: advisory
+audit_level: quick
+
+baseline:
+  strategy: merge-base
+  reference_ref: main
+
+application:
+  type: custom
+  start_command: "python3 -m http.server $PORT"
+  port: 3300
+  health_check: "/"
+
+routes:
+  base_routes:
+    - "/"
+    - "/checkout.html"
+
+workflows:
+  - name: "Navigation to Checkout"
+    path: "/"
+    steps:
+      - action: navigate
+        value: "/"
+      - action: click
+        selector: "a.btn"
+      - action: assert_url
+        expected: "/checkout.html"
+
+visual:
+  enabled: true
+  diff_threshold: 0.02

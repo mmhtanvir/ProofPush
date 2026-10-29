@@ -1,0 +1,108 @@
+"""
+System Health and Diagnostic Doctor.
+Checks environment, dependencies, Git hooks, Playwright browsers, and configuration.
+"""
+
+import sys
+import shutil
+from pathlib import Path
+from typing import List, Dict, Any
+from change_auditor.utils import run_command
+from change_auditor.git_interceptor import GitInterceptor
+from change_auditor.config import load_config
+from change_auditor.baseline_manager import BaselineManager
+
+
+class Doctor:
+    def __init__(self, repo_path: Optional[Path] = None):
+        self.repo_path = (repo_path or Path.cwd()).resolve()
+
+    def run_all_checks(self) -> List[Dict[str, Any]]:
+        """Run all diagnostic checks and return structured results."""
+        checks = []
+
+        # 1. Python environment
+        py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        checks.append({
+            "name": "Python Environment",
+            "passed": sys.version_info >= (3, 9),
+            "detail": f"Python {py_ver} ({sys.executable})",
+        })
+
+        # 2. Git installation
+        git_path = shutil.which("git")
+        git_detail = "Git not found in PATH"
+        git_passed = bool(git_path)
+        if git_passed:
+            code, out, _ = run_command(["git", "--version"])
+            git_detail = out.strip() if code == 0 else "Git found but returned error"
+        checks.append({
+            "name": "Git CLI",
+            "passed": git_passed,
+            "detail": git_detail,
+        })
+
+        # 3. Repository check
+        git_interceptor = GitInterceptor(self.repo_path)
+        git_dir, _ = git_interceptor.get_git_dirs()
+        in_repo = bool(git_dir)
+        checks.append({
+            "name": "Git Repository",
+            "passed": in_repo,
+            "detail": f"Repository root: {self.repo_path}" if in_repo else "Current directory is not a Git repository",
+        })
+
+        # 4. Pre-push hook check
+        if in_repo:
+            hook_status = git_interceptor.inspect_hook()
+            hook_installed = hook_status.get("installed", False)
+            checks.append({
+                "name": "Pre-Push Hook",
+                "passed": hook_installed,
+                "detail": (
+                    f"Installed at {hook_status.get('path')} (legacy preserved: {hook_status.get('has_legacy')})"
+                    if hook_installed else "Not installed. Run `change-auditor install` to enable."
+                ),
+            })
+
+        # 5. Playwright & Chromium browser check
+        browser_passed = False
+        browser_detail = ""
+        try:
+            import playwright
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                b = p.chromium.launch(headless=True)
+                b.close()
+            browser_passed = True
+            browser_detail = "Playwright Chromium headless browser verified and ready"
+        except Exception as exc:
+            browser_detail = f"Chromium launch check failed: {exc}. Run `playwright install chromium`"
+
+        checks.append({
+            "name": "Browser Automation Engine",
+            "passed": browser_passed,
+            "detail": browser_detail,
+        })
+
+        # 6. Configuration file check
+        cfg = load_config(self.repo_path)
+        cfg_file = self.repo_path / ".change-auditor.yml"
+        has_cfg = cfg_file.is_file()
+        checks.append({
+            "name": "Configuration File",
+            "passed": True,  # Optional since defaults work
+            "detail": f"Using {cfg_file.name} (mode: {cfg.mode}, baseline: {cfg.baseline.strategy})" if has_cfg else "Using default configuration",
+        })
+
+        # 7. Baseline store check
+        if in_repo:
+            bm = BaselineManager(self.repo_path)
+            baselines = bm.list_baselines()
+            checks.append({
+                "name": "Baseline Availability",
+                "passed": True,
+                "detail": f"{len(baselines)} baseline snapshot(s) stored locally",
+            })
+
+        return checks
