@@ -208,7 +208,7 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     sys.exit(max(codes))
 
 
-async def _compare_clicks(engine, classifier, cfg, route, before_url, after_url, viewport) -> List[Finding]:
+async def _compare_clicks(engine, classifier, cfg, route, before_url, after_url, viewport, where=None) -> List[Finding]:
     """Click the same safe elements on both versions of a page; report ones that broke, vanished, slowed or got janky."""
     opts = cfg.interactions
     before, after = await asyncio.gather(
@@ -219,7 +219,7 @@ async def _compare_clicks(engine, classifier, cfg, route, before_url, after_url,
     missing = [before[k] for k in before if k not in after]
     if missing:
         after.update(await engine.probe_interactions(after_url, route, viewport=viewport, only=missing))
-    found = [classifier.classify_interaction(route, before[k], after.get(k)) for k in before]
+    found = [classifier.classify_interaction(where or route, before[k], after.get(k)) for k in before]
     return [f for f in found if f]
 
 
@@ -320,6 +320,18 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
             for route in list(dict.fromkeys([*live, *cand]))[: cfg.routes.max_pages]:
                 pages += 1
                 findings.append(classifier.classify_route_visit(route, live.get(route), cand.get(route)))
+                if route in live and route in cand:
+                    layout_finding = classifier.classify_layout(route, live[route].layout, cand[route].layout)
+                    if layout_finding:
+                        findings.append(layout_finding)
+                    # Other screen sizes (mobile, tablet): layout and load speed
+                    for vp in cfg.visual.viewports[1:]:
+                        dims = {"width": vp.width, "height": vp.height}
+                        before = await engine.visit_page(base_url, route, viewport=dims, capture_screenshot=False, discover_elements=False)
+                        after = await engine.visit_page(candidate_url, route, viewport=dims, capture_screenshot=False, discover_elements=False)
+                        layout_finding = classifier.classify_layout(f"{route} ({vp.name})", before.layout, after.layout)
+                        if layout_finding:
+                            findings.append(layout_finding)
                 both_load = route in live and route in cand and live[route].status < 400 and cand[route].status < 400
                 if cfg.interactions.auto_click and cfg.interactions.allow_on_live and both_load and pages <= cfg.interactions.max_pages:
                     findings.extend(await _compare_clicks(engine, classifier, cfg, route, base_url, candidate_url, None))
@@ -641,7 +653,9 @@ def _audit_update(
                                 ))
                             elif prop_err:
                                 findings.append(_blocked("Login (test account)", prop_err))
-                    viewports = cfg.visual.viewports[:1] if cfg.audit_level == "quick" else cfg.visual.viewports
+                    # Layout, speed and clicks are checked at every screen size; screenshots of the extra sizes only in full audits
+                    viewports = cfg.visual.viewports or [None]
+                    full_shots = cfg.audit_level != "quick"
                     shots, masks = cfg.visual.enabled, cfg.visual.excluded_selectors
 
                     def size(v):
@@ -658,8 +672,12 @@ def _audit_update(
                                 into[v.route] = v
                         routes = list(dict.fromkeys([*crawled_p, *crawled_b]))[: cfg.routes.max_pages]
 
-                    async def visit(url, route, vp):
-                        return await browser_engine.visit_page(url, route, viewport=size(vp), capture_screenshot=shots, mask_selectors=masks)
+                    async def visit(url, route, vp, screenshot=None):
+                        return await browser_engine.visit_page(url, route, viewport=size(vp), mask_selectors=masks,
+                                                               capture_screenshot=shots if screenshot is None else screenshot)
+
+                    def at(route, vp):
+                        return route if vp is first or not vp else f"{route} ({vp.name})"
 
                     def compare(route, before, after, vp):
                         if not (shots and before.screenshot_bytes and after.screenshot_bytes):
@@ -681,18 +699,27 @@ def _audit_update(
                             route=r, base_result=base_visit, prop_result=prop_visit,
                             visual_result=compare(r, base_visit, prop_visit, first),
                         ))
-                        if (cfg.interactions.auto_click and clicked_pages < cfg.interactions.max_pages
-                                and base_visit.status < 400 and prop_visit.status < 400):
-                            clicked_pages += 1
-                            findings.extend(await _compare_clicks(browser_engine, classifier, cfg, r,
-                                                                  base_url_b, base_url_p, size(first)))
-                        # Other viewports (full audits): layout only, e.g. a nav pushed offscreen on mobile
-                        for vp in viewports[1:]:
-                            before, after = await visit(base_url_b, r, vp), await visit(base_url_p, r, vp)
-                            vis_res = compare(r, before, after, vp)
-                            if vis_res and not vis_res.passed:
-                                findings.append(classifier.classify_route_visit(
-                                    route=f"{r} ({vp.name})", base_result=before, prop_result=after, visual_result=vis_res))
+                        click_here = (cfg.interactions.auto_click and clicked_pages < cfg.interactions.max_pages
+                                      and base_visit.status < 400 and prop_visit.status < 400)
+                        clicked_pages += click_here
+                        for vp in viewports:
+                            if vp is first:
+                                before, after = base_visit, prop_visit
+                            else:
+                                before = await visit(base_url_b, r, vp, screenshot=shots and full_shots)
+                                after = await visit(base_url_p, r, vp, screenshot=shots and full_shots)
+                                vis_res = compare(r, before, after, vp)
+                                if vis_res and not vis_res.passed:
+                                    findings.append(classifier.classify_route_visit(
+                                        route=at(r, vp), base_result=before, prop_result=after, visual_result=vis_res))
+                            # Responsive layout + load speed: sideways scroll, off-screen/overlapping controls, slower loads
+                            layout_finding = classifier.classify_layout(at(r, vp), before.layout, after.layout)
+                            if layout_finding:
+                                findings.append(layout_finding)
+                            # Buttons at this screen size (a mobile-only menu button can break on its own)
+                            if click_here:
+                                findings.extend(await _compare_clicks(browser_engine, classifier, cfg, r,
+                                                                      base_url_b, base_url_p, size(vp), at(r, vp)))
 
                     # Audit workflows
                     for wf in cfg.workflows:

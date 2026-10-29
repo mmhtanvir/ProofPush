@@ -100,6 +100,7 @@ class PageVisitResult:
     dom_text_snippet: str = ""
     error_message: Optional[str] = None
     passed: bool = True
+    layout: Dict[str, Any] = field(default_factory=dict)  # responsive-layout and load-speed measurements
 
 
 @dataclass
@@ -175,6 +176,50 @@ _MEASURE_JS = r"""() => {
 }"""
 
 
+# Installed before any page script runs: what loading the page cost (biggest paint, jank, layout jumps)
+_LOAD_METRICS_JS = r"""(() => {
+  const m = window.__ppLoad = {lcp: null, cls: 0, blocking: 0};
+  try { new PerformanceObserver(l => l.getEntries().forEach(e => { m.lcp = e.startTime; })).observe({type: 'largest-contentful-paint', buffered: true}); } catch (e) {}
+  try { new PerformanceObserver(l => l.getEntries().forEach(e => { if (!e.hadRecentInput) m.cls += e.value; })).observe({type: 'layout-shift', buffered: true}); } catch (e) {}
+  try { new PerformanceObserver(l => l.getEntries().forEach(e => { m.blocking += Math.max(0, e.duration - 50); })).observe({type: 'longtask', buffered: true}); } catch (e) {}
+})();"""
+
+# Responsive layout health at the current viewport: sideways scroll, off-screen / overlapping / tiny controls,
+# clipped text, which controls are visible, and load metrics
+_LAYOUT_JS = r"""() => {
+  const vw = document.documentElement.clientWidth;
+  const docW = Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
+  const label = el => (el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('placeholder') || el.id || el.tagName)
+    .trim().replace(/\s+/g, ' ').slice(0, 40);
+  const shown = el => { const s = getComputedStyle(el), r = el.getBoundingClientRect();
+    return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity !== 0 && r.width > 0 && r.height > 0; };
+  const sel = 'a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], [role=tab], [role=menuitem], summary';
+  const rects = [...document.querySelectorAll(sel)].filter(shown).slice(0, 300).map(el => [el, el.getBoundingClientRect()]);
+  const offscreen = rects.filter(([, r]) => r.right > vw + 1 || r.left < -1).map(([el]) => label(el));
+  const small = rects.filter(([, r]) => r.width < 24 || r.height < 24).map(([el]) => label(el));  // WCAG 2.5.8 minimum
+  const overlaps = [];
+  for (let i = 0; i < rects.length && overlaps.length < 20; i++) for (let j = i + 1; j < rects.length; j++) {
+    const [a, ra] = rects[i], [b, rb] = rects[j];
+    if (a.contains(b) || b.contains(a)) continue;
+    const ix = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left), iy = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+    if (ix > 4 && iy > 4 && ix * iy > 0.3 * Math.min(ra.width * ra.height, rb.width * rb.height)) overlaps.push(label(a) + ' / ' + label(b));
+  }
+  const clipped = [...document.querySelectorAll('body *')].slice(0, 3000).filter(el => {
+    if (![...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) return false;
+    const s = getComputedStyle(el);
+    return (s.overflow === 'hidden' || s.overflowX === 'hidden') && s.textOverflow !== 'ellipsis' && el.scrollWidth > el.clientWidth + 2;
+  }).map(label).slice(0, 20);
+  const nav = performance.getEntriesByType('navigation')[0], load = window.__ppLoad || {};
+  return {
+    overflow_px: Math.max(0, docW - vw), offscreen, small, overlaps, clipped,
+    controls: [...new Set(rects.map(([el]) => label(el)))].slice(0, 200),
+    load_ms: nav ? Math.round(nav.loadEventEnd || nav.domContentLoadedEventEnd || 0) : null,
+    lcp_ms: load.lcp == null ? null : Math.round(load.lcp), load_blocking_ms: Math.round(load.blocking || 0),
+    load_shift: Math.round((load.cls || 0) * 1000) / 1000,
+  };
+}"""
+
+
 class BrowserEngine:
     def __init__(self, headless: bool = True, timeout: int = 15000):
         self.headless = headless
@@ -236,6 +281,7 @@ class BrowserEngine:
                 storage_state=self.sessions.get(base_url),
             )
             page = await context.new_page()
+            await page.add_init_script(_LOAD_METRICS_JS)
 
             # Listen to console messages
             def on_console(msg):
@@ -280,6 +326,10 @@ class BrowserEngine:
 
                 # Wait short delay for client hydration / dynamic rendering
                 await page.wait_for_timeout(400)
+                try:
+                    layout = await page.evaluate(_LAYOUT_JS)
+                except Exception:
+                    layout = {}
 
                 title = await page.title()
                 dom_text = await page.evaluate("() => document.body ? document.body.innerText.substring(0, 500) : ''")
@@ -351,6 +401,7 @@ class BrowserEngine:
                     screenshot_bytes=screenshot,
                     dom_text_snippet=dom_text,
                     passed=is_pass,
+                    layout=layout,
                 )
 
             except Exception as exc:

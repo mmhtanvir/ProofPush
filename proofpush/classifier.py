@@ -228,6 +228,51 @@ class RegressionClassifier:
             reproduction_steps=[f"Open {route}", f"Click '{label}'"],
         )
 
+    def classify_layout(self, where: str, base: Dict[str, Any], prop: Dict[str, Any]) -> Optional[Finding]:
+        """Responsive layout and load speed at one screen size: report only what the new version made worse."""
+        if not base or not prop:
+            return None
+        broken, warn = [], []
+
+        def new_items(key):
+            return [x for x in prop.get(key, []) if x not in set(base.get(key, []))]
+
+        if prop.get("overflow_px", 0) > 10 and base.get("overflow_px", 0) <= 10:
+            broken.append(f"the page now scrolls sideways (content {prop['overflow_px']} px wider than the screen)")
+        if new_items("offscreen"):
+            broken.append("pushed off the screen: " + ", ".join(new_items("offscreen")[:5]))
+        if new_items("overlaps"):
+            warn.append("controls now overlap: " + ", ".join(new_items("overlaps")[:3]))
+        if new_items("clipped"):
+            warn.append("text now cut off in: " + ", ".join(new_items("clipped")[:3]))
+        if len(new_items("small")) >= 3:
+            warn.append(f"{len(new_items('small'))} more tap targets under 24 px: " + ", ".join(new_items("small")[:3]))
+        gone = [c for c in base.get("controls", []) if c not in set(prop.get("controls", []))]
+        if 0 < len(gone) <= 10:  # more than that is a redesign, not something silently missing
+            warn.append("no longer shown: " + ", ".join(gone[:5]))
+        for key, name, extra in (("load_ms", "loads", 1000), ("lcp_ms", "shows its main content", 1000)):
+            before, after = base.get(key), prop.get(key)
+            if before and after and after > max(2 * before, before + extra):
+                warn.append(f"{name} slower: {before} ms -> {after} ms")
+        if prop.get("load_blocking_ms", 0) - base.get("load_blocking_ms", 0) > 300:
+            warn.append(f"freezes while loading: main thread blocked {base.get('load_blocking_ms', 0)} ms -> {prop['load_blocking_ms']} ms")
+        if prop.get("load_shift", 0) > 0.1 and base.get("load_shift", 0) <= 0.1:
+            warn.append(f"layout jumps while loading (shift {base.get('load_shift', 0)} -> {prop['load_shift']})")
+        problems = broken + warn
+        if not problems:
+            return None
+        return Finding(
+            category="REGRESSION" if broken else "POSSIBLE_REGRESSION",
+            target=where,
+            before_behavior="Layout and loading were fine on the baseline",
+            after_behavior="; ".join(problems),
+            expected_behavior="Pages keep working at every screen size, as fast as before",
+            actual_result=problems[0],
+            confidence=0.8,
+            recommended_action=f"Open {where} at that screen size in the new version and compare with the live one.",
+            is_critical=bool(broken),
+        )
+
     def classify_workflow(
         self,
         base_wf: Optional[WorkflowExecutionResult],

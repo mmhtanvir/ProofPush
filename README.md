@@ -233,6 +233,25 @@ Safety: it never clicks anything that sounds destructive or data-changing (delet
 
 ---
 
+## 📱 Responsive Layout and Load Speed
+
+Every checked page is compared between the old and new version at **each screen size** in `visual.viewports` (desktop and mobile by default; add a tablet with `- {width: 768, height: 1024, name: tablet}`). Only what the new version made worse is reported:
+
+| Finding | Example |
+|---|---|
+| Sideways scrolling | `/ (mobile): the page now scrolls sideways (content 225 px wider than the screen)` |
+| Off-screen controls | `pushed off the screen: Cart` |
+| Overlapping controls | `controls now overlap: Search / Filter` |
+| Cut-off text | `text now cut off in: Order summary` |
+| Tiny tap targets | 3+ new controls under 24 px (WCAG 2.5.8) |
+| Missing at one size | `no longer shown: Menu` (e.g. the mobile hamburger) |
+| Slower loading | `loads slower: 400 ms -> 1900 ms`, `shows its main content slower` (largest contentful paint) |
+| Janky loading | `freezes while loading: main thread blocked 0 ms -> 650 ms`, `layout jumps while loading` |
+
+Sideways scrolling and off-screen controls count as regressions; the rest need review. With `interactions.auto_click`, buttons are also clicked at every screen size, so a mobile-only menu button that stops working is caught.
+
+---
+
 ## 🚨 Suspicious Push Rules
 
 Every push is also checked against **103 rules** for supply-chain and tampering patterns, ported from [Pushguard](https://github.com/saadiqayyum/pushguard)'s catalog (MIT, see `proofpush/PUSHGUARD_LICENSE`). They run locally from git alone, so they work in any repo, including unconfigured ones under `install --global`.
@@ -406,7 +425,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 60-scenario test suite |
+| `proofpush test` | Runs the built-in 61-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -422,11 +441,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 60 real-world developer scenarios:
+ProofPush is tested against 61 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 60 tests in 25s (OK)
+# Ran 61 tests in 30s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.
