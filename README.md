@@ -324,6 +324,24 @@ environments:
   prod: https://example.com          # a plain URL is treated as production
 ```
 
+**Assertions (business rules)**: any case or step can list `assertions`, small expressions over `response` (`status`, `body`, `ms`), `request` (`body`, `query`, `path`) and `vars` (values saved by earlier steps):
+
+```yaml
+api_tests:
+  cases:
+    - name: "Discount is applied correctly"
+      method: POST
+      path: /api/orders/
+      payload: {subtotal: 100, discount: 10}
+      assertions:
+        - response.status == 201
+        - response.body.total == response.body.subtotal - response.body.discount
+        - len(response.body.items) > 0 and response.body.items[0].price >= 0
+        - "'card_number' not in response.body"
+```
+
+Allowed: comparisons (`== != < <= > >= in not in`), `and or not`, `+ - * / // %`, literals (`true false null`, numbers, strings, lists), field and index access on JSON (`body.items[0].price`), and `len abs round min max sum`. Nothing else: no imports, no attribute access on Python objects, no other calls, so a config file can't run code. A failure names the values it saw: `assertion failed: \`response.body.total == 90\` (response.body.total = 100)`. A missing field never equals anything. A typo in an assertion stops that case from being sent and is reported as a configuration problem, not a regression.
+
 **Where it runs**
 - `git push` (local mode): both versions run locally from temporary checkouts; generated requests go to both.
 - `proofpush check --env staging`: checks one deployment against your assertions and the contract (no baseline). Generated reads; writes only with `allow_writes`.
@@ -570,7 +588,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 76-scenario test suite |
+| `proofpush test` | Runs the built-in 83-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -586,11 +604,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 76 real-world developer scenarios:
+ProofPush is tested against 83 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 76 tests in 52s (OK)
+# Ran 83 tests in 55s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

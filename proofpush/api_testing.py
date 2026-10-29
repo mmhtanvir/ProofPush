@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from proofpush import assertions
 from proofpush.classifier import Finding
 from proofpush.utils import redact_secrets, urlopen
 
@@ -79,6 +80,8 @@ class ApiCase:
     prod: bool = False  # approved for production
     guard: bool = False  # pins a previously fixed bug: any failure blocks, even if the baseline fails too
     save: Dict[str, str] = field(default_factory=dict)  # name -> "$.id", for later steps of the same case
+    assertions: List[str] = field(default_factory=list)  # expressions over response/request/vars (assertions.py)
+    config_errors: List[str] = field(default_factory=list)  # invalid assertions: the case is not sent
     steps: List["ApiCase"] = field(default_factory=list)
 
     @property
@@ -93,6 +96,7 @@ class ApiResult:
     body: Any = None
     error: Optional[str] = None  # connection refused, timeout...
     step_failures: List[str] = field(default_factory=list)
+    vars: Dict[str, str] = field(default_factory=dict)  # values saved by the case's steps
 
 
 # --- discovery -----------------------------------------------------------------------------------------------
@@ -403,7 +407,9 @@ def cases_from_config(raw_cases: List[Dict[str, Any]]) -> List[ApiCase]:
     def one(c: Dict[str, Any]) -> ApiCase:
         expect = c.get("expect") or {}
         status = expect.get("status")
-        body, kind = (c["json"], "json") if "json" in c else ((c["form"], "form") if "form" in c else (None, "json"))
+        body, kind = ((c["json"], "json") if "json" in c else (c["payload"], "json") if "payload" in c
+                      else (c["form"], "form") if "form" in c else (None, "json"))
+        checks = [str(x) for x in c.get("assertions") or []]
         return ApiCase(
             name=str(c.get("name") or f"{c.get('method', 'GET')} {c.get('path', '/')}"), method=str(c.get("method", "GET")).upper(),
             path=str(c.get("path", "/")), query=dict(c.get("query") or {}), body=body, body_kind=kind,
@@ -412,7 +418,7 @@ def cases_from_config(raw_cases: List[Dict[str, Any]]) -> List[ApiCase]:
             expect_body=dict(expect.get("body") or {}), expect_fields=list(expect.get("fields") or []),
             max_ms=expect.get("max_ms"), prod=bool(c.get("prod", False)), guard=bool(c.get("guard", False)),
             identity=str(c.get("as") or ""),
-            save=dict(c.get("save") or {}),
+            save=dict(c.get("save") or {}), assertions=checks, config_errors=assertions.validate_all(checks),
         )
     out = []
     for c in raw_cases or []:
@@ -421,6 +427,7 @@ def cases_from_config(raw_cases: List[Dict[str, Any]]) -> List[ApiCase]:
         if c.get("steps"):
             head = one({**c["steps"][0], "name": c.get("name"), "prod": c.get("prod", False), "guard": c.get("guard", False)})
             head.steps = [one(s) for s in c["steps"][1:]]
+            head.config_errors += [e for s in head.steps for e in s.config_errors]
             out.append(head)
         else:
             out.append(one(c))
@@ -437,6 +444,8 @@ class Policy:
 
     def refusal(self, case: ApiCase, identities: Optional[Dict[str, Dict[str, str]]] = None) -> Optional[str]:
         """Why this case must not be sent, or None. Production is read-only and explicit-only by default."""
+        if case.config_errors:
+            return "invalid assertion in .proofpush.yml: " + "; ".join(case.config_errors[:2])
         if case.identity and identities is not None and case.identity not in identities:
             return f"test identity '{case.identity}' has no credentials (api_tests.auth.<env>:{case.identity})"
         if self.env_type == "production":
@@ -624,6 +633,10 @@ def check_expectations(case: ApiCase, res: ApiResult) -> Tuple[List[str], str]:
             failures.append(f"field {f} missing")
     if case.max_ms and res.ms > case.max_ms:
         failures.append(f"took {res.ms} ms, limit {case.max_ms} ms")
+    if case.assertions:
+        context = {"response": {"status": res.status, "body": res.body, "ms": res.ms},
+                   "request": {"body": case.body, "query": case.query, "path": case.path}, "vars": dict(res.vars)}
+        failures += [f for f in (assertions.check(expr, context) for expr in case.assertions) if f]
     ep = case.endpoint
     if ep and res.status is not None and ep.responses and case.kind in ("valid", "explicit"):
         documented = ep.responses.get(str(res.status))
@@ -739,10 +752,13 @@ class Runner:
             if result is None:
                 result = r
             elif step is not case:
+                r.vars = dict(variables)
                 fails, _ = check_expectations(step, r)
                 result.step_failures += [f"step '{step.name}': {f}" for f in fails]
             if r.error:
                 break
+        if result is not None:
+            result.vars = dict(variables)
         return result
 
 
