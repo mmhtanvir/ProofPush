@@ -25,7 +25,7 @@ from proofpush.baseline_manager import BaselineManager, BaselineMetadata
 from proofpush.environment_manager import EnvironmentManager
 from proofpush.route_discoverer import RouteDiscoverer
 from proofpush.fix_history import FixHistoryGuard
-from proofpush import push_rules
+from proofpush import notifier, push_rules
 from proofpush.browser_engine import BrowserEngine
 from proofpush.visual_comparator import VisualComparator
 from proofpush.unrelated_analyzer import UnrelatedAnalyzer
@@ -201,6 +201,21 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     sys.exit(max(codes))
 
 
+def _notify(cfg: AuditorConfig, repo_path: Path, title: str, reason: str, findings: List[Finding],
+            report_path: str, details: dict) -> None:
+    """Desktop + webhook alert for a blocked push or failed check (people may not be watching the terminal)."""
+    problems = [f for f in findings if f.category not in ("UNCHANGED", "EXPECTED_CHANGE", "NEW_FUNCTIONALITY", "NOTICE")]
+    repo = push_rules.repo_name(repo_path)
+    lines = [f"{repo}: {reason}"] + [f"• {f.category.replace('_', ' ').lower()}: {f.target}" for f in problems[:3]]
+    if len(problems) > 3:
+        lines.append(f"• +{len(problems) - 3} more")
+    lines.append(f"Report: {report_path}")
+    notifier.notify(cfg.notify, repo_path, title, "\n".join(lines), {
+        **details, "repo": repo, "reason": reason, "report": report_path,
+        "findings": [{"category": f.category, "target": f.target, "critical": f.is_critical} for f in problems],
+    })
+
+
 def _blocked(target: str, problem: str) -> Finding:
     return Finding(
         category="BLOCKED", target=target, before_behavior="", after_behavior=problem,
@@ -292,7 +307,11 @@ def check(env_name: str):
     )
     reporter = ReportGenerator(repo_path, cfg.report_retention)
     reporter.print_terminal_report(report)
-    console.print(f"[dim]Evidence saved:[/dim] [cyan]{reporter.save_reports(report)['html']}[/cyan]")
+    html = reporter.save_reports(report)["html"]
+    console.print(f"[dim]Evidence saved:[/dim] [cyan]{html}[/cyan]")
+    if failed:
+        _notify(cfg, repo_path, f"ProofPush: {env_name} check failed", report.decision_reason, findings, html,
+                {"event": "check_failed", "environment": env_name, "url": base_url})
     sys.exit(1 if failed else 0)
 
 
@@ -573,6 +592,10 @@ def _audit_update(
     saved_paths = reporter.save_reports(report_data)
 
     console.print(f"[dim]Evidence saved:[/dim] [cyan]{saved_paths['html']}[/cyan]")
+    if decision.exit_code != 0:
+        branch = active_update.remote_ref.replace("refs/heads/", "")
+        _notify(cfg, repo_path, f"ProofPush blocked a push to {branch}", decision.reason, findings,
+                saved_paths["html"], {"event": "push_blocked", "branch": branch, "commit": proposed_sha})
     if decision.exit_code != 0 and detect_unattended():
         # Plain text for AI agents reading the push output
         console.print(

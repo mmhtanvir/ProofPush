@@ -107,6 +107,24 @@ flowchart LR
 
 ---
 
+## 🔔 Knowing When a Push Was Blocked
+
+- **Terminal:** the report prints right there, followed by git's `failed to push`.
+- **Desktop notification:** when nobody is at a terminal (pushes from VS Code, GitHub Desktop, Cursor, an AI agent, or a scheduled `proofpush check`), ProofPush shows an OS notification: macOS Notification Center, `notify-send` on Linux, a tray balloon on Windows. On by default; never in CI.
+- **Team channel:** send blocked pushes and failed prod checks to Slack, Discord, or any URL that accepts JSON (Zapier, n8n, your own endpoint):
+
+```yaml
+notify:
+  desktop: true
+  webhook_env: TEAM_WEBHOOK   # put TEAM_WEBHOOK=https://hooks.slack.com/services/... in .proofpush/secrets.env or your environment
+```
+
+Slack and Discord get a formatted message; other URLs get `{"text", "event", "repo", "branch"|"environment", "reason", "findings", "report"}`. Secrets are redacted before anything leaves your machine, and a dead webhook never delays a push by more than 5 seconds.
+
+For prod, run `proofpush check --env prod` after each deploy (CI step) or on a schedule (cron); failures reach the same webhook.
+
+---
+
 ## 🔐 Test Accounts: Check the Whole Site, Locally and in Prod
 
 Give ProofPush a test account per environment and it logs in, crawls every page reachable by links, and checks each one, including pages behind the login.
@@ -312,7 +330,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 45-scenario test suite |
+| `proofpush test` | Runs the built-in 48-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -328,11 +346,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 45 real-world developer scenarios:
+ProofPush is tested against 48 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 45 tests in 12s (OK)
+# Ran 48 tests in 12s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

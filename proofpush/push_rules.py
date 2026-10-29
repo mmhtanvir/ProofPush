@@ -262,7 +262,7 @@ def evaluate(rules: List[dict], ctx: PushContext, enable: List[str] = (), disabl
     return findings
 
 
-def _repo_name(repo_path: Path) -> str:
+def repo_name(repo_path: Path) -> str:
     code, url, _ = run_command(["git", "remote", "get-url", "origin"], cwd=repo_path)
     m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url.strip()) if code == 0 else None
     return m.group(1) if m else repo_path.name
@@ -290,6 +290,6 @@ def build_context(repo_path: Path, base_sha: str, proposed_sha: str, remote_ref:
     branch = remote_ref[len("refs/heads/"):] if remote_ref.startswith("refs/heads/") else remote_ref.split("/")[-1]
     return PushContext(
         files=files, added_lines=added, commit_messages=commit_messages, branch=branch,
-        repo=_repo_name(repo_path), forced=forced, branch_created=branch_created,
+        repo=repo_name(repo_path), forced=forced, branch_created=branch_created,
         hour_utc=datetime.now(timezone.utc).hour,
     )

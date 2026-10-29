@@ -126,3 +126,8 @@ policies:
 
 # Keep the newest N report sets in .proofpush/reports (older reports and screenshots are deleted)
 report_retention: 30
+
+# Alerts for blocked pushes and failed checks
+# notify:
+#   desktop: true            # OS notification when nobody is at a terminal (GUI / AI agent pushes)
+#   webhook_env: TEAM_WEBHOOK  # Slack / Discord / generic webhook URL, kept in .proofpush/secrets.env

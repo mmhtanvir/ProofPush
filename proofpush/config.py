@@ -139,6 +139,12 @@ class PushRulesConfig:
 
 
 @dataclass
+class NotifyConfig:
+    desktop: bool = True  # OS notification when nobody is watching a terminal (GUI/agent pushes, scheduled checks)
+    webhook_env: str = ""  # name of the env var / secrets.env key holding a Slack, Discord or generic webhook URL
+
+
+@dataclass
 class AuditorConfig:
     mode: str = "interactive"  # advisory, interactive, strict
     audit_level: str = "quick"  # quick, full
@@ -153,6 +159,7 @@ class AuditorConfig:
     push_rules: PushRulesConfig = field(default_factory=PushRulesConfig)
     auth: Optional[AuthConfig] = None
     environments: Dict[str, str] = field(default_factory=dict)  # name -> live base URL, e.g. prod
+    notify: NotifyConfig = field(default_factory=NotifyConfig)
     report_retention: int = 30
 
 
@@ -169,6 +176,23 @@ def _parse_steps(raw_steps) -> List[WorkflowStep]:
     ]
 
 
+def secret_value(repo_path: Path, name: str) -> Optional[str]:
+    """A secret by name: environment variable first, then .proofpush/secrets.env (kept out of git)."""
+    if not name:
+        return None
+    if os.environ.get(name):
+        return os.environ[name]
+    secrets_file = repo_path / ".proofpush" / "secrets.env"
+    if not secrets_file.is_file():
+        return None
+    exclude_from_git(repo_path)
+    for line in secrets_file.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key.strip() == name:
+            return value.strip().strip("'\"") or None
+    return None
+
+
 def session_file(repo_path: Path, env_name: str) -> Path:
     """Browser session saved by `proofpush login` (for SMS/email codes, SSO, captchas)."""
     return repo_path / ".proofpush" / f"session-{env_name}.json"
@@ -179,16 +203,9 @@ def resolve_account(repo_path: Path, auth: AuthConfig, env_name: str) -> Tuple[O
     acc = auth.accounts.get(env_name)
     if not acc or not acc.username_env or not acc.password_env:
         return None, f"auth.accounts.{env_name} needs username_env and password_env in .proofpush.yml"
-    secrets_file = repo_path / ".proofpush" / "secrets.env"
-    file_values: Dict[str, str] = {}
-    if secrets_file.is_file():
-        exclude_from_git(repo_path)
-        for line in secrets_file.read_text(encoding="utf-8").splitlines():
-            key, sep, value = line.strip().partition("=")
-            if sep and not key.startswith("#"):
-                file_values[key.strip()] = value.strip().strip("'\"")
+
     def lookup(name: str) -> Optional[str]:
-        return (os.environ.get(name) or file_values.get(name)) if name else None
+        return secret_value(repo_path, name)
 
     user, password = lookup(acc.username_env), lookup(acc.password_env)
     if not user or not password:
@@ -328,6 +345,10 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
             name: (env.get("url", "") if isinstance(env, dict) else str(env))
             for name, env in raw["environments"].items()
         }
+
+    if isinstance(raw.get("notify"), dict):
+        n = raw["notify"]
+        config.notify = NotifyConfig(desktop=bool(n.get("desktop", True)), webhook_env=n.get("webhook_env", "") or "")
 
     if "push_rules" in raw and isinstance(raw["push_rules"], dict):
         pr = raw["push_rules"]
