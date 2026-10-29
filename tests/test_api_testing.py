@@ -11,6 +11,7 @@ Covers:
 - Scenario 68: Secrets never reach findings (headers, tokens, sensitive fields and query values)
 - Scenario 69: Database safety: remote/production databases block test suites and migrations
 - Scenario 70: Backward compatibility: configs without api_tests behave as before
+- Scenario 72: A second test identity reading the first one's resource (IDOR) is a regression when it's new
 - Scenario 71: Pre-push hook end to end (AI agent, strict): a backend change that removes an endpoint and
   brings back a fixed bug is blocked without prompting
 """
@@ -68,7 +69,7 @@ class TestApiTesting(GitRepoTestCase):
 
         spec, origin = at.load_openapi(self.local_dir, "", self.start("good"))
         self.assertEqual(origin, "/openapi.json")
-        self.assertEqual(len(at.endpoints_from_openapi(spec)), 6)
+        self.assertEqual(len(at.endpoints_from_openapi(spec)), 7)
 
         (self.local_dir / "api").mkdir()
         (self.local_dir / "api" / "main.py").write_text('@router.put("/api/users/{uid}")\ndef u(): ...\n@app.route("/x", methods=["GET", "POST"])\ndef x(): ...\n')
@@ -231,3 +232,17 @@ class TestApiTesting(GitRepoTestCase):
         self.assertIn("/api/legacy", text)
         self.assertIn("Push blocked for Claude Code", text)
         self.assertNotIn("Approve push anyway", text)
+
+    def test_scenario_72_other_user_cannot_read_your_records(self):
+        other = {"other": {"Authorization": "Bearer other-token"}}
+        cases = [c for c in at.generate_cases(self.endpoints(), other_identity="other") if c.kind == "other_user"]
+        # /api/items/{id} is documented as public (no security), so it isn't an ownership check
+        self.assertEqual([c.path for c in cases], ["/api/notes/1"])
+        outcomes = {o.case.path: o for o in at.run_suite(cases, at.Policy("local"), at.RunLimits(rate_per_second=1000),
+                                                          self.start("bad"), AUTH, self.start("good"), AUTH, identities=other)}
+        notes = outcomes["/api/notes/1"]
+        self.assertEqual(notes.classification, "regression")
+        self.assertIn("another test user (other) can read this resource (200)", notes.details[0])
+        missing = at.run_suite(cases[:1], at.Policy("local"), at.RunLimits(), self.start("good"), AUTH, identities={})
+        self.assertIn("has no credentials", missing[0].refusal)
+

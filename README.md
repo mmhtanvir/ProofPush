@@ -361,7 +361,18 @@ api_tests:
   auth: {local: {Authorization: "Token {LOCAL_API_TOKEN}"}}
 ```
 
-**Not covered yet**: separate users for cross-account access tests, disposable PostgreSQL per version, background jobs/queues, multipart uploads, and AI-proposed payloads. Without an OpenAPI schema, request bodies can't be generated: write explicit `cases` for important write endpoints.
+**Cross-account access (IDOR)**: add a second test identity and every protected resource endpoint (one with an id in its path) that the main user can read is also requested as the other user, which must get 403/404. Explicit cases can run as that identity with `as: other`.
+
+```yaml
+api_tests:
+  auth:
+    local: {Authorization: "Bearer {USER_A_TOKEN}"}
+    local:other: {Authorization: "Bearer {USER_B_TOKEN}"}   # <env>:<identity>
+```
+
+It's a regression when the old version denied the other user and the new one allows it; when both allow it, it's reported as existing so you can confirm the data is meant to be shared. Endpoints the OpenAPI schema marks as public are skipped.
+
+**Not covered yet**: role matrices beyond two identities, disposable PostgreSQL per version, background jobs/queues, multipart uploads, and AI-proposed payloads. Without an OpenAPI schema, request bodies can't be generated: write explicit `cases` for important write endpoints.
 
 ---
 
@@ -558,7 +569,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 74-scenario test suite |
+| `proofpush test` | Runs the built-in 75-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -574,11 +585,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 74 real-world developer scenarios:
+ProofPush is tested against 75 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 74 tests in 46s (OK)
+# Ran 75 tests in 52s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

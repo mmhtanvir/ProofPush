@@ -39,6 +39,10 @@ SPEC = {
         "/api/items/{item_id}": {"get": {"parameters": [{"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}, "example": 1}],
                                          "responses": {"200": {"description": "one"}, "404": {"description": "missing"}}}},
         "/api/legacy": {"get": {"responses": {"200": {"description": "old feature"}}}},
+        "/api/notes/{note_id}": {"get": {"security": [{"bearer": []}],
+                                         "parameters": [{"name": "note_id", "in": "path", "required": True, "schema": {"type": "integer"}, "example": 1}],
+                                         "responses": {"200": {"description": "the owner's private note"}, "401": {"description": "no auth"},
+                                                       "404": {"description": "not yours or missing"}}}},
         "/api/total": {"get": {"parameters": [{"name": "qty", "in": "query", "required": True, "schema": {"type": "integer"}, "example": 2}],
                                "responses": {"200": {"description": "price x qty"}}}},
     },
@@ -69,6 +73,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"items": [item]})
         if url.path.startswith("/api/items/"):
             return self.send(200, item) if url.path.endswith("/1") else self.send(404, {"detail": "not found"})
+        if url.path == "/api/notes/1":
+            auth = self.headers.get("Authorization")
+            if auth not in (TOKEN, "Bearer other-token"):
+                return self.send(401, {"detail": "auth required"})
+            if auth != TOKEN and not bad:  # bad: any logged-in user can read someone else's note
+                return self.send(404, {"detail": "not found"})
+            return self.send(200, {"id": 1, "owner": "a", "text": "private"})
         if url.path == "/api/legacy" and not bad:
             return self.send(200, {"ok": True})
         if url.path == "/api/total":

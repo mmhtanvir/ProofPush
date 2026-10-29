@@ -70,7 +70,8 @@ class ApiCase:
     body_kind: str = "json"  # json | form | raw
     headers: Dict[str, str] = field(default_factory=dict)
     with_auth: bool = True
-    kind: str = "valid"  # valid | invalid | unauth | explicit
+    kind: str = "valid"  # valid | invalid | unauth | other_user | explicit
+    identity: str = ""  # which configured test identity sends it ("" = the main one)
     expect_status: Optional[List[int]] = None
     expect_body: Dict[str, Any] = field(default_factory=dict)  # "$.a.b[0]" -> value
     expect_fields: List[str] = field(default_factory=list)
@@ -368,7 +369,8 @@ def _fill_path(ep: Endpoint) -> Tuple[str, Dict[str, Any]]:
     return path, query
 
 
-def generate_cases(endpoints: List[Endpoint], max_invalid: int = 4, auth_configured: bool = False) -> List[ApiCase]:
+def generate_cases(endpoints: List[Endpoint], max_invalid: int = 4, auth_configured: bool = False,
+                   other_identity: Optional[str] = None) -> List[ApiCase]:
     cases: List[ApiCase] = []
     for ep in endpoints:
         path, query = _fill_path(ep)
@@ -389,6 +391,10 @@ def generate_cases(endpoints: List[Endpoint], max_invalid: int = 4, auth_configu
         if ep.requires_auth or (ep.requires_auth is None and auth_configured and ep.source != "frontend-traffic"):
             cases.append(ApiCase(name="without credentials", kind="unauth", body=body, with_auth=False,
                                  expect_status=[401, 403] if ep.requires_auth else None, **base))
+        # Ownership: a specific resource read by a second test user (IDOR) should be denied
+        if other_identity and ep.method == "GET" and ("{" in ep.path or ep.sample_path) and ep.requires_auth is not False:
+            cases.append(ApiCase(name=f"as another test user ({other_identity})", kind="other_user",
+                                 identity=other_identity, **base))
     return cases
 
 
@@ -405,6 +411,7 @@ def cases_from_config(raw_cases: List[Dict[str, Any]]) -> List[ApiCase]:
             kind="explicit", expect_status=[status] if isinstance(status, int) else status,
             expect_body=dict(expect.get("body") or {}), expect_fields=list(expect.get("fields") or []),
             max_ms=expect.get("max_ms"), prod=bool(c.get("prod", False)), guard=bool(c.get("guard", False)),
+            identity=str(c.get("as") or ""),
             save=dict(c.get("save") or {}),
         )
     out = []
@@ -428,8 +435,10 @@ class Policy:
     allow_writes: bool = False
     remote_database: Optional[str] = None  # why the app's database looks shared/remote
 
-    def refusal(self, case: ApiCase) -> Optional[str]:
+    def refusal(self, case: ApiCase, identities: Optional[Dict[str, Dict[str, str]]] = None) -> Optional[str]:
         """Why this case must not be sent, or None. Production is read-only and explicit-only by default."""
+        if case.identity and identities is not None and case.identity not in identities:
+            return f"test identity '{case.identity}' has no credentials (api_tests.auth.<env>:{case.identity})"
         if self.env_type == "production":
             if case.kind != "explicit" or not case.prod:
                 return "production runs only approved cases (prod: true)"
@@ -626,6 +635,9 @@ def check_expectations(case: ApiCase, res: ApiResult) -> Tuple[List[str], str]:
     if case.kind == "invalid" and not case.expect_status and res.status is not None and res.status < 400:
         failures.append(f"accepted invalid input ({case.name}) with {res.status}")
         source = source or "input validation"
+    if case.kind == "other_user" and res.status is not None and res.status < 300:
+        failures.append(f"another test user ({case.identity}) can read this resource ({res.status})")
+        source = source or "authorization"
     if case.kind == "unauth" and res.status is not None and res.status < 300 and (case.expect_status or ep and ep.requires_auth is not False):
         failures.append(f"responded {res.status} without credentials")
         source = source or "authentication"
@@ -695,8 +707,9 @@ class RunLimits:
 class Runner:
     """Sends cases to one or two deployments with a global request budget and rate limit (one request at a time)."""
 
-    def __init__(self, limits: RunLimits):
+    def __init__(self, limits: RunLimits, identities: Optional[Dict[str, Dict[str, str]]] = None):
         self.limits = limits
+        self.identities = identities or {}  # name -> headers for cases sent `as` another test identity
         self.sent = 0
         self._last = 0.0
 
@@ -717,7 +730,8 @@ class Runner:
         for step in [case] + case.steps:
             if not self._throttle():
                 return result
-            r = http_call(base_url, step, auth, self.limits.timeout, self.limits.max_body_bytes, variables)
+            creds = self.identities.get(step.identity, auth) if step.identity else auth
+            r = http_call(base_url, step, creds, self.limits.timeout, self.limits.max_body_bytes, variables)
             for name, path in step.save.items():
                 value = json_path(r.body, path)
                 if value is not _MISSING:
@@ -734,11 +748,12 @@ class Runner:
 
 def run_suite(cases: List[ApiCase], policy: Policy, limits: RunLimits, cand_url: str, cand_auth: Dict[str, str],
               base_url: Optional[str] = None, base_auth: Optional[Dict[str, str]] = None,
-              normalize: Optional[List[str]] = None) -> List[CaseOutcome]:
-    runner = Runner(limits)
+              normalize: Optional[List[str]] = None,
+              identities: Optional[Dict[str, Dict[str, str]]] = None) -> List[CaseOutcome]:
+    runner = Runner(limits, identities)
     outcomes = []
     for case in cases:
-        refusal = policy.refusal(case)
+        refusal = policy.refusal(case, identities or {})
         if refusal:
             outcomes.append(CaseOutcome(case, None, None, "not_tested", [], refusal=refusal))
             continue

@@ -245,7 +245,7 @@ def _discover(cfg: AuditorConfig, roots: List[Path], app_url: Optional[str], hea
 def _run_api_tests(cfg: AuditorConfig, roots: List[Path], env_name: str, env_type: str, cand_url: str, cand_headers: Dict[str, str],
                    base_url: Optional[str] = None, base_headers: Optional[Dict[str, str]] = None,
                    changed_files: Optional[List[str]] = None, traffic=None, remote_db: Optional[str] = None,
-                   allow_writes: Optional[bool] = None) -> List[Finding]:
+                   allow_writes: Optional[bool] = None, repo_path: Optional[Path] = None) -> List[Finding]:
     """API payload tests for one environment (and a baseline to compare with, when given)."""
     opts = cfg.api_tests
     if opts.mode == "off":
@@ -253,15 +253,19 @@ def _run_api_tests(cfg: AuditorConfig, roots: List[Path], env_name: str, env_typ
     endpoints, origin = _discover(cfg, roots, base_url or cand_url, cand_headers, traffic)
     selected = api_testing.select_endpoints(endpoints, opts.mode, changed_files or [])
     cases = api_testing.cases_from_config(opts.cases)
+    # Extra test identities: api_tests.auth keys "<env>:<name>" (e.g. local:other) for ownership checks
+    secrets_root = repo_path or roots[-1]  # .proofpush/secrets.env lives in the working copy, not in audit checkouts
+    identities = {k.split(":", 1)[1]: resolve_headers(secrets_root, v) for k, v in opts.auth.items() if k.startswith(f"{env_name}:")}
     if env_type != "production":  # generated (and invalid) requests never go to production
-        cases += api_testing.generate_cases(selected, opts.max_invalid_per_endpoint, auth_configured=bool(cand_headers))
+        cases += api_testing.generate_cases(selected, opts.max_invalid_per_endpoint, auth_configured=bool(cand_headers),
+                                            other_identity=next(iter(identities), None))
     policy = api_testing.Policy(env_type=env_type, remote_database=remote_db,
                                 allow_writes=opts.allow_writes if allow_writes is None else allow_writes)
     limits = api_testing.RunLimits(opts.max_requests, opts.rate_per_second, opts.timeout, opts.max_body_bytes)
     console.print(f"API tests ({opts.mode}, {env_type}): {len(endpoints)} endpoint(s) discovered"
                   + (f" incl. OpenAPI from {origin}" if origin else "") + f", {len(cases)} case(s)", markup=False)
     outcomes = api_testing.run_suite(cases, policy, limits, cand_url, cand_headers, base_url, base_headers,
-                                     opts.normalize_fields)
+                                     opts.normalize_fields, identities)
     return api_testing.to_findings(outcomes, len(endpoints), f"{env_name} ({env_type})")
 
 
@@ -879,7 +883,7 @@ def _audit_update(
                         api_url(prop_env), _api_headers_for(cfg, repo_path, "local", cookies(api_url(prop_env))),
                         api_url(base_env), _api_headers_for(cfg, repo_path, "local", cookies(api_url(base_env))),
                         changed_files=changed, traffic=observed_calls,
-                        remote_db=api_testing.remote_database(app_env),
+                        remote_db=api_testing.remote_database(app_env), repo_path=repo_path,
                     ))
 
         finally:
