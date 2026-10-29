@@ -159,7 +159,7 @@ class TestApiTesting(GitRepoTestCase):
         cases = [at.ApiCase(name=f"c{i}", method="GET", path="/api/health") for i in range(5)]
         start = time.monotonic()
         outcomes = at.run_suite(cases, at.Policy("local"), at.RunLimits(max_requests=3, rate_per_second=10), url, {})
-        self.assertGreaterEqual(time.monotonic() - start, 0.2)  # 3 requests at 10/s
+        self.assertGreaterEqual(time.monotonic() - start, 0.15)  # 3 requests at 10/s: two 0.1 s gaps (coarse clocks on Windows)
         self.assertEqual([o.classification for o in outcomes].count("not_tested"), 2)
 
         slow = at.ApiCase(name="slow", method="GET", path="/slow")

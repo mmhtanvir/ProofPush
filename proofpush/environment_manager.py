@@ -246,7 +246,9 @@ class EnvironmentManager:
                 shell=True,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
-                preexec_fn=os.setsid if sys.platform != "win32" else None,
+                # New process group so cleanup can stop the whole tree. start_new_session (not preexec_fn=os.setsid):
+                # preexec_fn runs Python in the forked child, which can deadlock on macOS when the parent has threads
+                start_new_session=sys.platform != "win32",
             )
             instance.process = proc
         except Exception as exc:

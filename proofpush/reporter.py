@@ -58,7 +58,8 @@ class ReportGenerator:
 
     def _prune(self) -> None:
         """Keep the newest `retention` report sets, and screenshots no older than the oldest kept report."""
-        reports = sorted(self.reports_dir.glob("report_*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        # Name breaks mtime ties (coarse clocks on Windows); names start with a nanosecond timestamp
+        reports = sorted(self.reports_dir.glob("report_*.json"), key=lambda f: (f.stat().st_mtime, f.name), reverse=True)
         for old in reports[self.retention:]:
             for ext in (".json", ".md", ".html"):
                 old.with_suffix(ext).unlink(missing_ok=True)
