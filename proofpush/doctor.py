@@ -29,7 +29,7 @@ class Doctor:
         py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         checks.append({
             "name": "Python Environment",
-            "passed": sys.version_info >= (3, 9),
+            "passed": sys.version_info >= (3, 10),
             "detail": f"Python {py_ver} ({sys.executable})",
         })
 

@@ -90,7 +90,8 @@ class EnvironmentManager:
         if not start_cmd:
             # Check if there is an index.html in the worktree
             if (worktree / "index.html").is_file():
-                start_cmd = "python3 -m http.server $PORT"
+                # This interpreter (Windows has no `python3`), loopback only (not reachable from the network)
+                start_cmd = f'"{sys.executable}" -m http.server $PORT --bind 127.0.0.1'
             else:
                 # No server needed or no start command provided
                 env.is_ready = True
@@ -235,7 +236,8 @@ class EnvironmentManager:
                             if sys.platform != "win32":
                                 os.killpg(os.getpgid(s.process.pid), signal.SIGTERM)
                             else:
-                                s.process.terminate()
+                                # shell=True: the tracked pid is cmd.exe; /T also ends the server it started
+                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(s.process.pid)], capture_output=True)
                             s.process.wait(timeout=2)
                         except Exception:
                             try:
