@@ -335,8 +335,12 @@ class EnvironmentManager:
                 # What the app's processes are doing (running, sleeping, stuck) - the session id is the shell's pid
                 ps = run_command(["ps", "-o", "pid,stat,etime,command", "-g", str(proc.pid)], timeout=5)[1].strip()
                 listening += f"; processes:\n{ps[:800]}"
+            hint = ""
+            if "http.server" in cmd_str and "proofpush.static_server" not in cmd_str:
+                hint = (" Hint: `python -m http.server` does a reverse-DNS lookup before it starts listening, which can"
+                        " take 30 s+ on some Macs; use `python -m proofpush.static_server $PORT` instead.")
             instance.error_message = (f"Health check timed out after {service_cfg.health_timeout}s on {health_url} "
-                                      f"(last error: {last_error}; {listening}). Log:\n{log_content}")
+                                      f"(last error: {last_error}; {listening}).{hint} Log:\n{log_content}")
 
         return instance
 

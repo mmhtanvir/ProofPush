@@ -25,7 +25,7 @@ baseline:
 # Application startup and lifecycle configuration:
 application:
   type: custom # custom, nextjs, django, fastapi, node, static
-  start_command: "python3 -m http.server $PORT"
+  start_command: "python3 -m proofpush.static_server $PORT"  # static files; like http.server without its slow DNS lookup
   port: 3000
   health_check: "/"
   health_timeout: 30

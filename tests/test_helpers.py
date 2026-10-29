@@ -115,7 +115,7 @@ baseline:
   strategy: merge-base
 application:
   type: custom
-  start_command: "python3 -m http.server $PORT"
+  start_command: "python3 -m proofpush.static_server $PORT"
   port: 3200
   health_check: "/"
 routes:
