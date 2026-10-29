@@ -378,7 +378,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 52-scenario test suite |
+| `proofpush test` | Runs the built-in 54-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -394,11 +394,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 52 real-world developer scenarios:
+ProofPush is tested against 54 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 52 tests in 13s (OK)
+# Ran 54 tests in 14s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

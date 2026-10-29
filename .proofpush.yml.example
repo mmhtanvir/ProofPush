@@ -17,7 +17,7 @@ audit_level: quick
 #   the git merge base against reference_ref (recommended)
 # - captured: compare against locally saved snapshot captured with `proofpush baseline capture`
 # - commit: compare against explicit git revision
-# - latest-passed: compare against latest commit that successfully passed audit
+# - latest-passed: compare against the last commit that passed an audit (recorded automatically, newest 50 kept)
 baseline:
   strategy: merge-base
   reference_ref: origin/main

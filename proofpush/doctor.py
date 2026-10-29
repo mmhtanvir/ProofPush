@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from proofpush.utils import run_command
 from proofpush.git_interceptor import GitInterceptor
-from proofpush.config import load_config, find_config_file
+from datetime import datetime
+
+from proofpush.config import find_config_file, load_config, resolve_account, secret_value, session_file
 from proofpush.baseline_manager import BaselineManager
 
 
@@ -96,7 +98,33 @@ class Doctor:
             "detail": f"Using {cfg_file.name} (mode: {cfg.mode}, baseline: {cfg.baseline.strategy})" if has_cfg else "Using default configuration",
         })
 
-        # 7. Baseline store check
+        # 7. Test accounts: can each one be resolved? (values are never printed)
+        if cfg.auth:
+            for env_name in cfg.auth.accounts:
+                creds, problem = resolve_account(self.repo_path, cfg.auth, env_name)
+                saved = session_file(self.repo_path, env_name)
+                detail = "credentials found" + (" + authenticator secret" if creds and creds.otp_secret else "") if creds else problem
+                if saved.is_file():
+                    detail += f"; saved session from {datetime.fromtimestamp(saved.stat().st_mtime):%Y-%m-%d}"
+                checks.append({"name": f"Test Account ({env_name})", "passed": bool(creds) or saved.is_file(), "detail": detail})
+
+        # 8. Live environments and alerts
+        for env_name, url in cfg.environments.items():
+            checks.append({"name": f"Environment ({env_name})", "passed": url.startswith(("http://", "https://")),
+                           "detail": f"{url}  (`proofpush check --env {env_name}`)"})
+        if cfg.notify.webhook_env:
+            has_hook = bool(secret_value(self.repo_path, cfg.notify.webhook_env))
+            checks.append({"name": "Team Webhook", "passed": has_hook,
+                           "detail": "configured" if has_hook else f"set {cfg.notify.webhook_env} in your environment or .proofpush/secrets.env"})
+
+        # 9. secrets.env must not be readable by other users
+        secrets_env = self.repo_path / ".proofpush" / "secrets.env"
+        if secrets_env.is_file():
+            loose = secrets_env.stat().st_mode & 0o077
+            checks.append({"name": "Secrets File", "passed": not loose,
+                           "detail": "readable only by you" if not loose else f"readable by others: run `chmod 600 {secrets_env}`"})
+
+        # 10. Baseline store check
         if in_repo:
             bm = BaselineManager(self.repo_path)
             baselines = bm.list_baselines()

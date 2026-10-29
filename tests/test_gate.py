@@ -66,3 +66,36 @@ class TestGate(GitRepoTestCase):
         self.assertEqual(finding.category, "NOTICE")
         self.assertFalse(finding.is_critical)
         self.assertTrue(classifier.classify_route_visit("/reports", fine, broken).is_critical)
+
+    def test_scenario_51_latest_passed_baseline_and_version(self):
+        """Passed audits are recorded for `latest-passed`, without replacing the manual `captured` snapshot."""
+        from proofpush import __version__
+        from proofpush.baseline_manager import BaselineManager
+
+        first = self.commit_file("a.txt", "a\n", "one")
+        second = self.commit_file("a.txt", "b\n", "two")
+        bm = BaselineManager(self.local_dir)
+        self.assertIsNone(bm.get_latest_passed_baseline())
+        bm.record_passed_audit(first)
+        bm.record_passed_audit(second)
+        self.assertEqual(bm.resolve_baseline_sha("latest-passed", proposed_sha="HEAD"), second)
+        self.assertFalse((bm.storage_dir / "latest.json").exists())
+        for _ in range(4):
+            bm.record_passed_audit(first, keep=3)
+        self.assertEqual(len(list(bm.storage_dir.glob("baseline_*.json"))), 3)
+
+        out = subprocess.run([sys.executable, "-m", "proofpush", "--version"], capture_output=True, text=True)
+        self.assertIn(__version__, out.stdout)
+
+    def test_scenario_52_secrets_file_tightened(self):
+        import stat
+        from proofpush.config import secret_value
+        secrets = self.local_dir / ".proofpush" / "secrets.env"
+        secrets.parent.mkdir()
+        secrets.write_text("TEAM_WEBHOOK=https://hooks.slack.com/services/T/B/x\n")
+        secrets.chmod(0o644)
+        clean = {k: v for k, v in os.environ.items() if k != "TEAM_WEBHOOK"}
+        from unittest import mock
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self.assertEqual(secret_value(self.local_dir, "TEAM_WEBHOOK"), "https://hooks.slack.com/services/T/B/x")
+        self.assertEqual(stat.S_IMODE(secrets.stat().st_mode), 0o600)

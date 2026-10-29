@@ -18,6 +18,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from proofpush import __version__
 from proofpush.config import load_config, resolve_account, session_file, AuditorConfig
 from proofpush.git_interceptor import GitInterceptor, PushRefUpdate
 from proofpush.task_resolver import TaskResolver
@@ -41,6 +42,7 @@ console = Console(soft_wrap=True)
 
 
 @click.group()
+@click.version_option(version=__version__, prog_name="proofpush")
 def main():
     """ProofPush: Audits website functionality and visual regressions before Git push."""
 
@@ -728,6 +730,8 @@ def _audit_update(
     saved_paths = reporter.save_reports(report_data)
 
     console.print(f"[dim]Evidence saved:[/dim] [cyan]{saved_paths['html']}[/cyan]")
+    if decision.allowed and not any(f.is_critical or f.category == "REGRESSION" for f in findings):
+        baseline_mgr.record_passed_audit(proposed_sha)
     if decision.exit_code != 0:
         branch = active_update.remote_ref.replace("refs/heads/", "")
         _notify(cfg, repo_path, f"ProofPush blocked a push to {branch}", decision.reason, findings,

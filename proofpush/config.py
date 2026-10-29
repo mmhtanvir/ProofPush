@@ -186,6 +186,8 @@ def secret_value(repo_path: Path, name: str) -> Optional[str]:
     if not secrets_file.is_file():
         return None
     exclude_from_git(repo_path)
+    if secrets_file.stat().st_mode & 0o077:
+        secrets_file.chmod(0o600)  # holds passwords and webhook URLs: owner-only
     for line in secrets_file.read_text(encoding="utf-8").splitlines():
         key, sep, value = line.strip().partition("=")
         if sep and key.strip() == name:

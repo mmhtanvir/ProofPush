@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+from datetime import datetime
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -104,10 +105,9 @@ class BaselineManager:
 
         return None
 
-    def save_baseline(self, metadata: BaselineMetadata) -> Path:
+    def save_baseline(self, metadata: BaselineMetadata, update_latest: bool = True) -> Path:
         """Save baseline metadata and artifacts."""
-        ts = int(time.time())
-        filename = f"baseline_{metadata.git_revision[:10]}_{ts}.json"
+        filename = f"baseline_{metadata.git_revision[:10]}_{time.time_ns()}.json"  # ns: same-second saves don't collide
         dest = self.storage_dir / filename
 
         # Ensure environment secrets are NEVER saved
@@ -120,11 +120,25 @@ class BaselineManager:
         data = asdict(metadata)
         dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-        # Also update 'latest.json'
-        latest_file = self.storage_dir / "latest.json"
-        latest_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # Also update 'latest.json' (the `captured` strategy's manual snapshot)
+        if update_latest:
+            latest_file = self.storage_dir / "latest.json"
+            latest_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
         return dest
+
+    def record_passed_audit(self, revision: str, keep: int = 50) -> None:
+        """Remember a commit that passed an audit, for the `latest-passed` baseline strategy."""
+        self.save_baseline(BaselineMetadata(
+            repo_id=self.repo_id, repo_path=str(self.repo_path), git_revision=revision,
+            created_at=datetime.now().isoformat(), passed=True, name="audit-passed",
+        ), update_latest=False)
+        records = sorted(
+            (f for f in self.storage_dir.glob("baseline_*.json") if '"name": "audit-passed"' in f.read_text(encoding="utf-8")),
+            key=lambda f: f.stat().st_mtime, reverse=True,
+        )
+        for old in records[keep:]:
+            old.unlink(missing_ok=True)
 
     def get_latest_baseline(self) -> Optional[BaselineMetadata]:
         """Fetch the most recent baseline."""
