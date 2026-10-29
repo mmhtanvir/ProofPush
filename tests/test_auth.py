@@ -130,3 +130,26 @@ class TestAuth(GitRepoTestCase):
         script = self.test_dir / "hook.sh"
         script.write_text(hook)
         self.assertEqual(subprocess.run(["bash", "-n", str(script)]).returncode, 0)
+
+    def test_scenario_45b_captcha_is_explained_not_bypassed(self):
+        """A login page with Turnstile/reCAPTCHA/hCaptcha yields advice (test keys locally, `proofpush login` in prod)."""
+        import asyncio
+        from proofpush.browser_engine import BrowserEngine
+
+        async def advice_for(html):
+            engine = BrowserEngine()
+            page_file = self.test_dir / "login.html"
+            page_file.write_text(html)
+            async with engine._shared_browser() as browser:
+                context = await browser.new_context()
+                page = await context.new_page()
+                await page.goto(page_file.as_uri())
+                result = await engine._captcha_advice(page)
+                await context.close()
+            await engine.close()
+            return result
+
+        self.assertIn("Cloudflare Turnstile", asyncio.run(advice_for('<form><div class="cf-turnstile" data-sitekey="0x4AAA"></div></form>')))
+        self.assertIn("1x00000000000000000000AA", asyncio.run(advice_for('<div class="cf-turnstile"></div>')))
+        self.assertIn("hCaptcha", asyncio.run(advice_for('<div class="h-captcha"></div>')))
+        self.assertIsNone(asyncio.run(advice_for("<form><input type=password></form>")))

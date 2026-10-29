@@ -21,6 +21,16 @@ from proofpush.utils import redact_secrets, totp
 
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 
+# (name, selector, official always-pass test keys) for CAPTCHAs that block automated logins
+CAPTCHAS = [
+    ("Cloudflare Turnstile", "iframe[src*='challenges.cloudflare.com'], .cf-turnstile, [data-sitekey^='0x']",
+     "site key 1x00000000000000000000AA, secret 1x0000000000000000000000000000000AA"),
+    ("Google reCAPTCHA", "iframe[src*='recaptcha'], .g-recaptcha, .grecaptcha-badge",
+     "site key 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI, secret 6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe"),
+    ("hCaptcha", "iframe[src*='hcaptcha.com'], .h-captcha",
+     "site key 10000000-ffff-ffff-ffff-000000000001, secret 0x0000000000000000000000000000000000000000"),
+]
+
 
 def retarget_session(saved_session: Path, base_url: str) -> Dict[str, Any]:
     """Saved browser state, with loopback cookies/storage moved to base_url's host and port.
@@ -321,6 +331,7 @@ class BrowserEngine:
                     saved_session: Optional[Path] = None, probe_route: str = "/") -> Optional[str]:
         """Log the test account in (or reuse a saved session) and keep it for later visits. Returns an error, or None."""
         async with self._shared_browser() as browser:
+            page = None
             try:
                 login_url = f"{base_url.rstrip('/')}{auth.login_path}"
                 # 1. A session saved by `proofpush login` (needed for SMS/email codes, SSO, captchas)
@@ -371,10 +382,14 @@ class BrowserEngine:
                         await page.press(OTP_SELECTOR + " >> nth=0", "Enter")
                 await self._settle(page)
                 if await self._on_login_form(page):
-                    return f"Still on a login form after signing in ({page.url}); check the test account or auth.steps"
+                    return await self._captcha_advice(page) or (
+                        f"Still on a login form after signing in ({page.url}); check the test account or auth.steps")
                 self.sessions[base_url] = await context.storage_state()
                 return None
             except Exception as exc:
+                advice = await self._captcha_advice(page) if page else None
+                if advice:
+                    return advice
                 # Never echo credentials: Playwright errors can include filled values
                 msg = str(exc)
                 if creds:
@@ -382,6 +397,19 @@ class BrowserEngine:
                 return redact_secrets(msg).splitlines()[0]
             finally:
                 await self._close_contexts(browser)
+
+    async def _captcha_advice(self, page) -> Optional[str]:
+        """If the login page carries a CAPTCHA, explain how to get past it legitimately (never by solving it)."""
+        for name, selector, test_keys in CAPTCHAS:
+            try:
+                if await page.locator(selector).count() > 0:
+                    return (f"The login page has a {name} CAPTCHA, which automated logins cannot pass (by design). "
+                            f"Locally: start the app with {name}'s official test keys ({test_keys}) via application.env "
+                            "in .proofpush.yml; the backend that verifies the token must use the test secret too. "
+                            "Prod: run `proofpush login --env prod` once and solve it yourself.")
+            except Exception:
+                pass
+        return None
 
     async def _settle(self, page) -> None:
         try:

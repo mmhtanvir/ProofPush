@@ -154,6 +154,10 @@ Put the values in your shell environment or in `.proofpush/secrets.env` (`SHOP_U
 - **SMS / email codes, SSO, captchas:** run `proofpush login --env prod` once. A browser opens, you log in and type the code, and the session is saved to `.proofpush/session-prod.json` (kept out of git). Checks reuse it until it expires, then tell you to log in again.
   For local, point it at your dev server (`proofpush login --env local --url http://localhost:3000`); the session follows the audit to whatever port it runs each version on.
 
+**CAPTCHAs (Cloudflare Turnstile, reCAPTCHA, hCaptcha).** ProofPush never solves them. When one blocks the login it says so, and how to get through:
+- **Local:** run the app with the provider's official always-pass test keys through `application.env` (e.g. Turnstile site key `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA`). The backend that verifies the token must use the test secret too.
+- **Prod:** `proofpush login --env prod` once, solving the CAPTCHA yourself.
+
 Use a dedicated low-privilege test account in prod, never an admin.
 
 ---
@@ -330,7 +334,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 48-scenario test suite |
+| `proofpush test` | Runs the built-in 49-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -346,11 +350,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 48 real-world developer scenarios:
+ProofPush is tested against 49 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 48 tests in 12s (OK)
+# Ran 49 tests in 12s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.
