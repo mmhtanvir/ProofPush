@@ -23,6 +23,14 @@ if [ "${PROOFPUSH_RUNNING}" = "1" ] || [ "${CHANGE_AUDITOR_RUNNING}" = "1" ]; th
     exit 0
 fi
 
+# Detect if running via global core.hooksPath and repo is not configured for ProofPush
+GLOBAL_HOOKS=$(git config --global core.hooksPath 2>/dev/null || echo "")
+if [ -n "${GLOBAL_HOOKS}" ]; then
+    if [ ! -f ".proofpush.yml" ] && [ ! -f ".proofpush.yaml" ] && [ ! -f ".change-auditor.yml" ] && [ ! -f ".change-auditor.yaml" ] && [ ! -f ".proofpush-task.md" ] && [ ! -f ".change-auditor-task.md" ]; then
+        exit 0
+    fi
+fi
+
 # Run legacy / pre-existing hook first if present
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEGACY_HOOK="${HOOK_DIR}/pre-push.legacy"
@@ -173,6 +181,13 @@ class GitInterceptor:
         if legacy_hook.exists():
             legacy_hook.rename(hook_file)
             restored = True
+        elif global_mode:
+            run_command(["git", "config", "--global", "--unset", "core.hooksPath"])
+            try:
+                hooks_dir.rmdir()
+                hooks_dir.parent.rmdir()
+            except Exception:
+                pass
 
         return {
             "success": True,
