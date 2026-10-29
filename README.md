@@ -480,15 +480,22 @@ ProofPush runs inside `git push`, so it works with any AI CLI that pushes: Claud
 
   ```
   [proofpush] WHY THIS PUSH WAS BLOCKED: Non-interactive session (Claude Code): ...
-    1. SECRET: settings.txt:1
-       what: REDACTED_AWS_KEY_ID in outgoing code
-    2. REGRESSION: API GET /api/total [total uses quantity (bug #12)]
-       what: previously fixed bug is back: assertion failed: `response.body.total == 2.5 * request.query.qty` (response.body.total = 2.5, ...)
-       reproduce: GET /api/total?qty=2
-    3. REMOVED FUNCTIONALITY: API GET /api/legacy [valid request]
-       what: endpoint removed: answered 200 before, now 404
+    (frontend 2, backend 3)
+    FRONTEND:
+      1. REGRESSION: / (mobile)
+         what: the page now scrolls sideways (content 325 px wider than the screen)
+      2. REGRESSION: /
+         what: Encountered 1 new browser console errors
+    BACKEND:
+      3. REGRESSION: Backend (seen on /)
+         what: GET /api/items now returns 500 (was 200)
+      4. REGRESSION: API GET /api/total [total uses quantity (bug #12)]
+         what: previously fixed bug is back: assertion failed: `response.body.total == 2.5 * request.query.qty` (response.body.total = 2.5, ...)
+         reproduce: GET /api/total?qty=2
   Full report: .proofpush/reports/report_....md  (JSON: ....json)
   ```
+
+  Items are grouped **FRONTEND** (pages, layout per screen size, buttons, visuals), **BACKEND** (API responses, the calls behind pages, the project's tests, permissions), **CODE & SECURITY** (secrets, reverted fixes, suspicious-push rules, deleted tests) and **ENVIRONMENT** (the app, browser or database couldn't start: not a code bug, but the check couldn't run).
 
   Deployment gates print the same list ("WHY THIS DEPLOYMENT WAS REJECTED").
 - **Blocks with instructions the agent can act on.** Unattended pushes with findings are blocked (`policies.interactive_fallback: block`, the default). The output names the agent, points to the Markdown report, and tells it to fix the findings or ask you, and not to bypass with `--no-verify`.
@@ -623,7 +630,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 85-scenario test suite |
+| `proofpush test` | Runs the built-in 87-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -639,7 +646,7 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 85 real-world developer scenarios:
+ProofPush is tested against 87 real-world developer scenarios:
 
 ```bash
 proofpush test

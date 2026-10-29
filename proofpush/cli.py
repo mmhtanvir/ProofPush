@@ -485,34 +485,59 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
 
 
 BLOCKING_ORDER = ["REGRESSION", "SUSPICIOUS_PUSH", "REMOVED_FUNCTIONALITY", "POSSIBLE_REGRESSION", "BLOCKED"]
+LAYERS = ["FRONTEND", "BACKEND", "CODE & SECURITY", "ENVIRONMENT"]
+_ENVIRONMENT_TARGETS = ("Application Server", "Browser Engine", "Test account", "Login", "Release history",
+                        "Permission matrix", "Test suite (")
+
+
+def layer_of(f: Finding) -> str:
+    """Which side of the app a finding is about, so the reader knows where to look."""
+    t = f.target or ""
+    if f.category == "BLOCKED" and t.startswith(_ENVIRONMENT_TARGETS):
+        return "ENVIRONMENT"
+    if f.category == "SUSPICIOUS_PUSH" or t.startswith(("Past fix", "Release history")):
+        return "CODE & SECURITY"
+    if t.startswith(("API ", "Backend", "Test suite", "Permission matrix")) or "fails on the backend" in (f.after_behavior or ""):
+        return "BACKEND"
+    if t.startswith(("Application Server", "Browser Engine", "Test account", "Login")):
+        return "ENVIRONMENT"
+    return "FRONTEND"  # pages, layout at a screen size, buttons, visuals, workflows
 
 
 def why_blocked(headline: str, reason: str, findings: List[Finding], security_res=None,
-                report_paths: Optional[Dict[str, str]] = None, limit: int = 8) -> str:
-    """Short plain-text list of what blocked a push/deploy: the last thing an AI agent (or a person) reads."""
-    items = []
+                report_paths: Optional[Dict[str, str]] = None, per_layer: int = 4) -> str:
+    """Plain-text reasons a push/deploy was blocked, grouped FRONTEND / BACKEND / CODE & SECURITY / ENVIRONMENT.
+
+    The last thing in the output, where AI agents (and people) look.
+    """
+    items: Dict[str, list] = {layer: [] for layer in LAYERS}
     for s in (security_res.secrets_found if security_res else []):
-        items.append(("SECRET", f"{s.file_path}:{s.line_number}", f"{s.pattern_type} in outgoing code", ""))
+        items["CODE & SECURITY"].append(("SECRET", f"{s.file_path}:{s.line_number}", f"{s.pattern_type} in outgoing code", ""))
     for t in (security_res.deleted_tests if security_res else []):
-        items.append(("DELETED TEST", t, "test file removed in this push", ""))
+        items["CODE & SECURITY"].append(("DELETED TEST", t, "test file removed in this push", ""))
     ranked = sorted((f for f in findings if f.category in BLOCKING_ORDER),
                     key=lambda f: (not f.is_critical, BLOCKING_ORDER.index(f.category)))
     for f in ranked:
         # BLOCKED findings keep the reason in actual_result ("Browser checks not run" alone says nothing)
         what = f.actual_result if f.category == "BLOCKED" else (f.after_behavior or f.actual_result)
         repro = next((r for r in f.reproduction_steps if r and not r.startswith(("body:", "+", "-"))), "")
-        items.append((f.category.replace("_", " ") + (" (critical)" if f.is_critical and f.category != "REGRESSION" else ""),
-                      f.target, what, repro))
-    lines = [f"[proofpush] {headline}: {reason}"]
-    for n, (kind, target, what, repro) in enumerate(items[:limit], 1):
-        lines.append(f"  {n}. {kind}: {target}")
-        lines.append(f"     what: {redact_secrets(' / '.join(str(what).split(chr(10))[:3]))[:300]}")
-        if repro:
-            lines.append(f"     reproduce: {redact_secrets(str(repro))[:200]}")
-    if len(items) > limit:
-        lines.append(f"  (+{len(items) - limit} more in the report)")
-    if not items:
-        lines.append("  (no individual finding: see the reason above)")
+        items[layer_of(f)].append((f.category.replace("_", " ") + (" (critical)" if f.is_critical and f.category != "REGRESSION" else ""),
+                                   f.target, what, repro))
+    counts = ", ".join(f"{layer.lower()} {len(items[layer])}" for layer in LAYERS if items[layer])
+    lines = [f"[proofpush] {headline}: {reason}", f"  ({counts or 'no individual findings'})"]
+    n = 0
+    for layer in LAYERS:
+        if not items[layer]:
+            continue
+        lines.append(f"  {layer}:")
+        for kind, target, what, repro in items[layer][:per_layer]:
+            n += 1
+            lines.append(f"    {n}. {kind}: {target}")
+            lines.append(f"       what: {redact_secrets(' / '.join(str(what).split(chr(10))[:3]))[:300]}")
+            if repro:
+                lines.append(f"       reproduce: {redact_secrets(str(repro))[:200]}")
+        if len(items[layer]) > per_layer:
+            lines.append(f"    (+{len(items[layer]) - per_layer} more {layer.lower()} item(s) in the report)")
     if report_paths:
         lines.append(f"Full report: {report_paths.get('markdown')}  (JSON: {report_paths.get('json')})")
     return "\n".join(lines)

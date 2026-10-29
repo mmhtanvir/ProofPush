@@ -100,3 +100,35 @@ class TestGate(GitRepoTestCase):
             self.assertEqual(secret_value(self.local_dir, "TEAM_WEBHOOK"), "https://hooks.slack.com/services/T/B/x")
         if sys.platform != "win32":  # no Unix permission bits on Windows
             self.assertEqual(stat.S_IMODE(secrets.stat().st_mode), 0o600)
+
+    def test_scenario_53b_why_blocked_groups_frontend_backend(self):
+        """The 'why blocked' summary an AI agent reads is grouped by where the problem is."""
+        from proofpush.classifier import Finding
+        from proofpush.cli import why_blocked
+        from proofpush.unrelated_analyzer import SecretFinding, SecurityAuditResult
+
+        def f(category, target, after, critical=True, steps=()):
+            return Finding(category=category, target=target, before_behavior="", after_behavior=after, expected_behavior="",
+                           actual_result=after, confidence=0.9, recommended_action="", is_critical=critical,
+                           reproduction_steps=list(steps))
+        findings = [
+            f("REGRESSION", "/checkout (mobile)", "the page now scrolls sideways"),
+            f("REGRESSION", "/ -> Star", "'Star' stopped working"),
+            f("REGRESSION", "Backend (seen on /orders)", "GET /api/orders now returns 500 (was 200)"),
+            f("REGRESSION", "API POST /api/items [missing required 'name']", "accepted invalid input", steps=["POST /api/items"]),
+            f("REGRESSION", "Test suite (pytest)", "2 test(s) passed before and fail now: test_total"),
+            f("REGRESSION", "Past fix abc123: Fix total", "re-adds 2 line(s) the fix removed"),
+            f("BLOCKED", "Browser Engine", "Browser checks not run"),
+            f("NOTICE", "API coverage", "12 run"),
+        ]
+        sec = SecurityAuditResult(has_critical_issue=True, secrets_found=[SecretFinding("a.py", 3, "REDACTED_AWS_KEY_ID", "")])
+        text = why_blocked("WHY THIS PUSH WAS BLOCKED", "Critical regressions", findings, sec, {"markdown": "r.md", "json": "r.json"})
+        order = [text.index(h) for h in ("  FRONTEND:", "  BACKEND:", "  CODE & SECURITY:", "  ENVIRONMENT:")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("(frontend 2, backend 3, code & security 2, environment 1)", text)
+        backend = text[text.index("  BACKEND:"):text.index("  CODE & SECURITY:")]
+        for item in ("/api/orders now returns 500", "accepted invalid input", "test_total"):
+            self.assertIn(item, backend)
+        self.assertIn("reproduce: POST /api/items", backend)
+        self.assertNotIn("API coverage", text)  # notices aren't reasons
+        self.assertIn("Full report: r.md", text)
