@@ -79,7 +79,7 @@ class PolicyEnforcer:
                 return EnforcementDecision(
                     allowed=False,
                     decision_label="BLOCKED",
-                    reason="Critical regressions or suspicious changes detected in this push.",
+                    reason="Critical regressions or suspicious changes detected in this change.",
                     exit_code=1,
                 )
             return EnforcementDecision(

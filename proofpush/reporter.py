@@ -132,7 +132,10 @@ class ReportGenerator:
                 print(f"Details: {v.summary}")
 
         print("\n" + "=" * 60)
-        decision_str = f"RESULT: CHECK {data.decision}" if data.enforcement_mode == "check" else f"RECOMMENDATION: PUSH {data.decision}"
+        decision_str = {
+            "check": f"RESULT: CHECK {data.decision}",
+            "gate": f"RESULT: DEPLOYMENT {data.decision}",
+        }.get(data.enforcement_mode, f"RECOMMENDATION: PUSH {data.decision}")
         print(decision_str)
         if data.decision_reason:
             print(f"Reason: {data.decision_reason}")

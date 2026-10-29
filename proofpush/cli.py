@@ -34,7 +34,7 @@ from proofpush.ai_engine import get_ai_adapter
 from proofpush.reporter import ReportGenerator, AuditReportData
 from proofpush.policy_enforcer import PolicyEnforcer
 from proofpush.doctor import Doctor
-from proofpush.utils import detect_unattended, exclude_from_git
+from proofpush.utils import detect_unattended, exclude_from_git, run_command
 
 
 console = Console(soft_wrap=True)
@@ -199,6 +199,142 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
         for u in to_audit
     ]
     sys.exit(max(codes))
+
+
+def _have_commit(repo_path: Path, sha: str) -> bool:
+    return run_command(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo_path)[0] == 0
+
+
+def _ensure_history(repo_path: Path, base: str, candidate: str) -> Optional[str]:
+    """CI/CD checkouts are often shallow; fetch enough history to see the live commit and past fixes."""
+    if run_command(["git", "rev-parse", "--is-shallow-repository"], cwd=repo_path)[1].strip() == "true":
+        if run_command(["git", "fetch", "--quiet", "--unshallow"], cwd=repo_path, timeout=300)[0] != 0:
+            run_command(["git", "fetch", "--quiet", "--deepen=1000"], cwd=repo_path, timeout=300)
+    for sha in (base, candidate):
+        if not _have_commit(repo_path, sha):
+            run_command(["git", "fetch", "--quiet", "origin", sha], cwd=repo_path, timeout=120)
+            if not _have_commit(repo_path, sha):
+                return f"Commit {sha[:10]} is not available in this checkout"
+    return None
+
+
+@main.command()
+@click.option("--base", "base_sha", default=None, help="Commit live now (default: $VERCEL_GIT_PREVIOUS_SHA)")
+@click.option("--candidate", "candidate_sha", default=None, help="Commit about to deploy (default: $VERCEL_GIT_COMMIT_SHA or HEAD)")
+@click.option("--base-url", default=None, help="Live site URL, to compare pages in the browser too")
+@click.option("--candidate-url", default=None, help="Candidate deployment URL (e.g. a preview), to compare against --base-url")
+@click.option("--env", "env_name", default="prod", help="Test account (auth.accounts.<env>) for the browser comparison")
+@click.option("--vercel", is_flag=True, help="Run as Vercel's Ignored Build Step: exit 0 cancels the deployment, 1 builds it")
+def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
+    """Deployment gate: reject a release that brings back fixed bugs or carries a critical finding.
+
+    Compares the commit live now with the one about to deploy (reverted past fixes, suspicious-push
+    rules, secrets) and, given both URLs, the two sites page by page as the test account. Always strict
+    and non-interactive. Exit 0 = deploy, 1 = reject (inverted with --vercel).
+    """
+    repo_path = Path.cwd().resolve()
+    cfg = load_config(repo_path)
+    deploy, reject = (1, 0) if vercel else (0, 1)
+    if vercel and os.environ.get("VERCEL_ENV", "production") != "production":
+        # Previews must build: they are what gets compared against prod before promoting
+        console.print("[proofpush] Preview deployment: building (only production deployments are gated).", markup=False)
+        sys.exit(deploy)
+
+    base_sha = base_sha or os.environ.get("VERCEL_GIT_PREVIOUS_SHA")
+    candidate_sha = candidate_sha or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "HEAD"
+    if not base_sha:
+        console.print("[proofpush] No live commit to compare against (first deployment): deploying.", markup=False)
+        sys.exit(deploy)
+    problem = _ensure_history(repo_path, base_sha, candidate_sha)
+    candidate_sha = run_command(["git", "rev-parse", candidate_sha], cwd=repo_path)[1].strip() or candidate_sha
+
+    findings: List[Finding] = []
+    security_res = None
+    branch = os.environ.get("VERCEL_GIT_COMMIT_REF") or run_command(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)[1].strip() or "main"
+    if problem:
+        findings.append(Finding(category="BLOCKED", target="Release history", before_behavior="", after_behavior=problem,
+                                expected_behavior="Live and candidate commits are both available", actual_result=problem,
+                                confidence=1.0, recommended_action="Check out with full history (fetch-depth: 0)", is_critical=True))
+        task_context = TaskResolver(repo_path).resolve(explicit_task="Deployment gate")
+    else:
+        commits = run_command(["git", "rev-list", f"{base_sha}..{candidate_sha}"], cwd=repo_path)[1].split()
+        messages = GitInterceptor(repo_path).get_commit_messages(commits)
+        task_context = TaskResolver(repo_path).resolve(commit_messages=messages)
+        rewrites_history = run_command(["git", "merge-base", "--is-ancestor", base_sha, candidate_sha], cwd=repo_path)[0] != 0
+        findings += FixHistoryGuard(repo_path).analyze(base_sha, candidate_sha)
+        if cfg.push_rules.enabled:
+            ctx = push_rules.build_context(repo_path, base_sha, candidate_sha, f"refs/heads/{branch}", messages,
+                                           forced=rewrites_history, branch_created=False)
+            findings += push_rules.evaluate(push_rules.load_catalog(), ctx, cfg.push_rules.enable, cfg.push_rules.disable)
+        security_res = UnrelatedAnalyzer(repo_path, sensitive_globs=cfg.security.sensitive_paths).analyze_changes(
+            base_sha=base_sha, proposed_sha=candidate_sha, task_context=task_context)
+
+    pages = 0
+    if base_url and candidate_url:
+        engine = BrowserEngine(headless=True)
+        excluded = RouteDiscoverer(repo_path, cfg.routes.base_routes, cfg.routes.excluded_routes)._is_excluded
+        classifier = RegressionClassifier(task_context)
+
+        async def compare():
+            nonlocal pages
+            if cfg.auth:
+                creds, why = resolve_account(repo_path, cfg.auth, env_name)
+                saved = session_file(repo_path, env_name)
+                if not creds and not saved.is_file():
+                    findings.append(_blocked(f"Test account ({env_name})", why))
+                    return
+                probe = (cfg.routes.base_routes or ["/"])[0]
+                live_err = await engine.login(base_url, cfg.auth, creds, saved, probe)
+                cand_err = await engine.login(candidate_url, cfg.auth, creds, saved, probe)
+                if cand_err and not live_err:
+                    findings.append(Finding(category="REGRESSION", target="Login (test account)",
+                                            before_behavior="Logs in on the live site", after_behavior=cand_err,
+                                            expected_behavior="Login keeps working", actual_result=cand_err,
+                                            confidence=0.95, recommended_action="Fix login before deploying.", is_critical=True))
+                    return
+            live = {v.route: v for v in await engine.crawl(base_url, cfg.routes.base_routes, cfg.routes.max_pages, excluded)}
+            cand = {v.route: v for v in await engine.crawl(candidate_url, cfg.routes.base_routes, cfg.routes.max_pages, excluded)}
+            for route in list(dict.fromkeys([*live, *cand]))[: cfg.routes.max_pages]:
+                pages += 1
+                findings.append(classifier.classify_route_visit(route, live.get(route), cand.get(route)))
+            for wf in cfg.workflows:
+                if wf.prod:
+                    findings.append(classifier.classify_workflow(await engine.execute_workflow(base_url, wf),
+                                                                 await engine.execute_workflow(candidate_url, wf), guard=wf.guard))
+
+        async def compare_and_close():
+            try:
+                await compare()
+            finally:
+                await engine.close()
+
+        try:
+            asyncio.run(compare_and_close())
+        except Exception as exc:
+            findings.append(_blocked("Browser Engine", str(exc).splitlines()[0]))
+
+    decision = PolicyEnforcer("strict", cfg.policies).evaluate(findings=findings, security_result=security_res, is_tty=False)
+    report = AuditReportData(
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), repo_path=str(repo_path),
+        baseline_sha=base_sha, proposed_sha=candidate_sha, task_title=task_context.title, task_source=task_context.source,
+        enforcement_mode="gate", decision="APPROVED" if decision.allowed else "REJECTED", decision_reason=decision.reason,
+        routes_checked=pages, workflows_checked=sum(1 for w in cfg.workflows if w.prod and base_url and candidate_url),
+        visual_checks=0, passed_count=sum(1 for f in findings if f.category == "UNCHANGED"), expected_count=0,
+        regressions_count=sum(1 for f in findings if f.category == "REGRESSION"),
+        not_tested_count=sum(1 for f in findings if f.category in ("NOT_TESTED", "BLOCKED")),
+        findings=findings, security_result=security_res,
+    )
+    reporter = ReportGenerator(repo_path, cfg.report_retention)
+    reporter.print_terminal_report(report)
+    html = reporter.save_reports(report)["html"]
+    if decision.allowed:
+        console.print(f"[proofpush] Gate passed: deploying {candidate_sha[:10]}.", markup=False)
+        sys.exit(deploy)
+    console.print(f"[proofpush] Deployment REJECTED: {decision.reason} Live stays on {base_sha[:10]}.", markup=False)
+    _notify(cfg, repo_path, f"ProofPush rejected a deployment of {branch}", decision.reason, findings, html,
+            {"event": "deploy_rejected", "branch": branch, "live": base_sha, "candidate": candidate_sha})
+    sys.exit(reject)
 
 
 def _notify(cfg: AuditorConfig, repo_path: Path, title: str, reason: str, findings: List[Finding],

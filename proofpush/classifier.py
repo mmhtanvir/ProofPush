@@ -44,6 +44,24 @@ class RegressionClassifier:
     ) -> Finding:
         """Classify comparison between baseline page visit and proposed page visit."""
 
+        def crashed(r: Optional[PageVisitResult]) -> bool:
+            return not r or r.status >= 500 or bool(r.error_message and "ERR_" in r.error_message)
+
+        # Case 0: Already broken before this change: worth knowing, not this change's fault
+        if base_result and crashed(base_result) and crashed(prop_result):
+            return Finding(
+                category="NOTICE",
+                target=route,
+                before_behavior=f"HTTP {base_result.status}: already failing before this change",
+                after_behavior=f"HTTP {prop_result.status if prop_result else 'unreachable'}: still failing",
+                expected_behavior="Page should load and respond normally.",
+                actual_result=f"Pre-existing error on {route}",
+                confidence=0.9,
+                recommended_action=f"Not caused by this change, but {route} is broken; fix it separately.",
+                is_critical=False,
+                reproduction_steps=[f"Navigate to {route}"],
+            )
+
         # Case 1: Testing blocked (e.g. server crash or network timeout)
         if not prop_result or prop_result.status >= 500 or (prop_result.error_message and "ERR_" in prop_result.error_message):
             return Finding(

@@ -107,6 +107,49 @@ flowchart LR
 
 ---
 
+## 🚦 Deployment Gate: Prod Stays on the Last Good Release
+
+The pre-push hook only protects machines that have it. To guarantee prod never receives a release that brings back a fixed bug, run `proofpush gate` where you deploy. It compares the commit **live now** with the one **about to deploy**: reverted past fixes, the 103 suspicious-push rules, secrets, and (given two URLs) every page side by side as the test account. It is always strict and never prompts. If the release is rejected, prod stays where it is and your team webhook / desktop gets the reason.
+
+**Frontend on Vercel** uses the Ignored Build Step: a rejected release shows as **Canceled** in Vercel and production keeps serving the current deployment. In `vercel.json`:
+
+```json
+{ "ignoreCommand": "pip3 install -q 'proofpush @ git+https://github.com/mmhtanvir/ProofPush' && proofpush gate --vercel" }
+```
+
+`--vercel` reads `VERCEL_GIT_PREVIOUS_SHA` (live) and `VERCEL_GIT_COMMIT_SHA` (new), deepens Vercel's shallow clone, gates only production deployments (previews always build), and inverts exit codes the way Vercel expects (0 = cancel).
+
+**Backend (e.g. `deploy.sh` on a server)** is a plain exit code: 0 deploy, 1 reject.
+
+```bash
+LIVE=$(git rev-parse HEAD)
+git fetch origin main
+proofpush gate --base "$LIVE" --candidate origin/main || { echo "Rejected by ProofPush, staying on $LIVE"; exit 1; }
+git merge --ff-only origin/main && sudo systemctl restart my-api
+```
+
+**Optional: compare the new frontend in the browser before it goes live.** Let Vercel build a preview, then gate it against prod, e.g. in GitHub Actions on `deployment_status` (with Vercel's Deployment Checks holding the production promotion until this check passes):
+
+```yaml
+on: deployment_status
+jobs:
+  gate:
+    if: github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: pip install 'proofpush @ git+https://github.com/mmhtanvir/ProofPush' && python -m playwright install --with-deps chromium
+      - run: >
+          proofpush gate --base origin/main --candidate ${{ github.event.deployment.sha }}
+          --base-url https://your-site.com --candidate-url ${{ github.event.deployment_status.target_url }}
+        env: { SHOP_PROD_USER: ${{ secrets.SHOP_PROD_USER }}, SHOP_PROD_PASSWORD: ${{ secrets.SHOP_PROD_PASSWORD }} }
+```
+
+Pages that were already broken on the live side are reported as notices, not blamed on the new release.
+
+---
+
 ## 🔔 Knowing When a Push Was Blocked
 
 - **Terminal:** the report prints right there, followed by git's `failed to push`.
@@ -328,13 +371,14 @@ application:
 | `proofpush review` | Manually runs an audit on your pending commits |
 | `proofpush review --full` | Runs a comprehensive audit (multi-viewport, full crawl) |
 | `proofpush review --mode strict` | Forces strict blocking mode |
+| `proofpush gate --base <live> --candidate <new>` | Deployment gate: exit 1 rejects a release that brings back fixed bugs (`--vercel` for Vercel's Ignored Build Step) |
 | `proofpush check --env prod` | Logs in with the prod test account and checks every reachable page of the live site (read-only) |
 | `proofpush login --env prod` | Log in by hand once (SMS/email codes, SSO) and save the session for checks |
 | `proofpush review --history-only` | Git-only checks (reverted past fixes, secrets), no app or browser |
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 49-scenario test suite |
+| `proofpush test` | Runs the built-in 52-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -350,11 +394,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 49 real-world developer scenarios:
+ProofPush is tested against 52 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 49 tests in 12s (OK)
+# Ran 52 tests in 13s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.
