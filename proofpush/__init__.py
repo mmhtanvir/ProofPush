@@ -5,5 +5,5 @@ Audits website functionality and visual appearance before Git push.
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __tool_name__ = "ProofPush"

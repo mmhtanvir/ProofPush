@@ -6,13 +6,13 @@ and determines whether to allow (exit 0) or block (exit 1) the Git push.
 
 from __future__ import annotations
 
-import sys
 import webbrowser
 from dataclasses import dataclass
 from typing import List, Optional
 from proofpush.config import PoliciesConfig
 from proofpush.classifier import Finding
 from proofpush.unrelated_analyzer import SecurityAuditResult
+from proofpush.utils import detect_unattended, open_user_terminal
 
 
 @dataclass
@@ -98,57 +98,67 @@ class PolicyEnforcer:
                 exit_code=0,
             )
 
-        tty_available = sys.stdin.isatty() if is_tty is None else is_tty
-
-        if not tty_available:
-            # Non-interactive environment (CI, unattended AI CLI, etc.)
+        # A person at a terminal gets prompted via /dev/tty; AI agents, CI and pipes never are (a prompt would hang them)
+        tty = None if is_tty is False else open_user_terminal()
+        if tty is None:
+            who = detect_unattended() or "no terminal"
             if self.policies.interactive_fallback == "allow":
                 return EnforcementDecision(
                     allowed=True,
                     decision_label="ALLOWED (FALLBACK)",
-                    reason="Non-interactive session: Allowed under interactive fallback policy.",
+                    reason=f"Non-interactive session ({who}): Allowed under interactive fallback policy.",
                     exit_code=0,
                 )
-            else:
-                return EnforcementDecision(
-                    allowed=False,
-                    decision_label="BLOCKED",
-                    reason="Non-interactive session: Blocked due to detected regressions under default policy.",
-                    exit_code=1,
-                )
+            return EnforcementDecision(
+                allowed=False,
+                decision_label="BLOCKED",
+                reason=f"Non-interactive session ({who}): Blocked because findings need a person to review them.",
+                exit_code=1,
+            )
 
-        # Interactive user prompt
-        print("\n[proofpush] Attention: Issues detected during pre-push audit.")
-        if has_secret:
-            print("  - [CRITICAL] Secret or credential detected in commits!")
-        if has_critical_regression:
-            print("  - [REGRESSION] Functional regressions detected between baseline and proposed.")
+        with tty:
+            def say(text: str) -> None:
+                tty.write(text + "\n")
+                tty.flush()
 
-        while True:
-            choice = input("\nApprove push anyway? [y/N/inspect/open report]: ").strip().lower()
-            if choice in ("y", "yes"):
-                return EnforcementDecision(
-                    allowed=True,
-                    decision_label="ALLOWED (USER OVERRIDE)",
-                    reason="Approved manually by developer.",
-                    exit_code=0,
-                )
-            elif choice in ("n", "no", ""):
-                return EnforcementDecision(
-                    allowed=False,
-                    decision_label="BLOCKED",
-                    reason="Rejected by developer during pre-push audit.",
-                    exit_code=1,
-                )
-            elif choice in ("open", "o", "open report") and report_html_path:
-                print(f"Opening report: {report_html_path}")
-                webbrowser.open(f"file://{report_html_path}")
-            elif choice in ("i", "inspect"):
-                for idx, f in enumerate(findings):
-                    if f.category == "REGRESSION":
-                        print(f"\n--- Finding #{idx + 1} ---")
-                        print(f"Target: {f.target}")
-                        print(f"Error:  {f.after_behavior}")
-                        print(f"Action: {f.recommended_action}")
-            else:
-                print("Invalid option. Please enter 'y', 'n', 'inspect', or 'open'.")
+            say("\n[proofpush] Attention: Issues detected during pre-push audit.")
+            if has_secret:
+                say("  - [CRITICAL] Secret or credential detected in commits!")
+            if has_critical_regression:
+                say("  - [REGRESSION] Functional regressions detected between baseline and proposed.")
+
+            options = "y/N/inspect" + ("/open" if report_html_path else "")
+            while True:
+                tty.write(f"\nApprove push anyway? [{options}]: ")
+                tty.flush()
+                line = tty.readline()
+                if not line:  # terminal closed
+                    choice = "n"
+                else:
+                    choice = line.strip().lower()
+                if choice in ("y", "yes"):
+                    return EnforcementDecision(
+                        allowed=True,
+                        decision_label="ALLOWED (USER OVERRIDE)",
+                        reason="Approved manually by developer.",
+                        exit_code=0,
+                    )
+                elif choice in ("n", "no", ""):
+                    return EnforcementDecision(
+                        allowed=False,
+                        decision_label="BLOCKED",
+                        reason="Rejected by developer during pre-push audit.",
+                        exit_code=1,
+                    )
+                elif choice in ("open", "o") and report_html_path:
+                    say(f"Opening report: {report_html_path}")
+                    webbrowser.open(f"file://{report_html_path}")
+                elif choice in ("i", "inspect"):
+                    for idx, f in enumerate(findings):
+                        if f.category in ("REGRESSION", "POSSIBLE_REGRESSION", "BLOCKED"):
+                            say(f"\n--- Finding #{idx + 1} ---")
+                            say(f"Target: {f.target}")
+                            say(f"Error:  {f.after_behavior}")
+                            say(f"Action: {f.recommended_action}")
+                else:
+                    say(f"Invalid option. Please enter one of: {options}.")

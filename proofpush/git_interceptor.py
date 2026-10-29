@@ -7,7 +7,9 @@ hook chaining, worktree awareness, and recursion prevention.
 from __future__ import annotations
 
 import os
+import shutil
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
@@ -41,7 +43,11 @@ if [ -n "${GLOBAL_HOOKS}" ]; then
     fi
 fi
 
+# GUI-launched AI tools (Cursor, VS Code agents) often run with a reduced PATH; fall back to the install-time path
 BIN_CMD="proofpush"
+if ! command -v proofpush >/dev/null 2>&1; then
+    BIN_CMD="__PROOFPUSH_BIN__"
+fi
 
 if [ -f "${LEGACY_HOOK}" ] && [ -x "${LEGACY_HOOK}" ]; then
     STDIN_TEMP=$(mktemp)
@@ -60,6 +66,12 @@ else
     exec ${BIN_CMD} review --hook ${EXTRA_ARGS}
 fi
 """
+
+
+def render_hook() -> str:
+    """Hook script with the absolute path of this proofpush install baked in as a PATH fallback."""
+    exe = shutil.which("proofpush") or f"{sys.executable} -m proofpush"
+    return HOOK_TEMPLATE.replace("__PROOFPUSH_BIN__", exe)
 
 
 # Client-side hooks that a global core.hooksPath would otherwise hide from every repo
@@ -159,7 +171,7 @@ class GitInterceptor:
             content = hook_file.read_text(encoding="utf-8", errors="ignore")
             if "proofpush" in content:
                 # Update existing hook
-                hook_file.write_text(HOOK_TEMPLATE, encoding="utf-8")
+                hook_file.write_text(render_hook(), encoding="utf-8")
                 hook_file.chmod(hook_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                 return {
                     "success": True,
@@ -173,7 +185,7 @@ class GitInterceptor:
                     hook_file.rename(legacy_hook)
                     preserved = True
 
-        hook_file.write_text(HOOK_TEMPLATE, encoding="utf-8")
+        hook_file.write_text(render_hook(), encoding="utf-8")
         hook_file.chmod(hook_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
         return {

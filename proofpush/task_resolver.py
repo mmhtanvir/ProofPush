@@ -1,23 +1,22 @@
 """
 Task Context Resolver.
 Resolves the intended task and expected behavior from:
-1. Explicit CLI flag / Environment variable
-2. Supported AI agent metadata (Claude Code, Gemini CLI, Codex, Cursor)
-3. Agent session / prompt artifacts
-4. Commit messages
-5. Repository task file (.git/proofpush-task.md or .proofpush-task.md)
-6. Interactive developer prompt
+1. Explicit CLI flag / PROOFPUSH_TASK environment variable (any AI CLI can set it)
+2. Repository task file (.git/proofpush-task.md or .proofpush-task.md)
+3. Commit messages
+4. Interactive developer prompt (only for a person at a terminal, never for AI agents)
 Includes protection against prompt injection in commit messages and task descriptions.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from proofpush.utils import open_user_terminal
 
 # Pattern detection for prompt injection attempts
 PROMPT_INJECTION_PATTERNS = [
@@ -83,27 +82,25 @@ class TaskResolver:
                 confidence=1.0,
             )
 
-        # Priority 2: AI Agent Lifecycle Hooks & Metadata
-        agent_task = self._check_ai_agent_metadata()
-        if agent_task:
-            return agent_task
-
-        # Priority 3: Task Context File (.git/proofpush-task.md or .proofpush-task.md)
+        # Priority 2: Task Context File (.git/proofpush-task.md or .proofpush-task.md)
         file_task = self._read_task_file()
         if file_task:
             return file_task
 
-        # Priority 4: Commit Messages
+        # Priority 3: Commit Messages
         if commit_messages and len(commit_messages) > 0:
             commit_task = self._parse_commit_messages(commit_messages)
             if commit_task:
                 return commit_task
 
-        # Priority 5: Interactive Question (if enabled and TTY)
-        if interactive and sys.stdin.isatty():
+        # Priority 4: Interactive Question (person at a terminal only)
+        tty = open_user_terminal() if interactive else None
+        if tty:
             try:
-                print("\n[proofpush] No task description found.")
-                user_task = input("What change or feature were you working on? ").strip()
+                with tty:
+                    tty.write("\n[proofpush] No task description found.\nWhat change or feature were you working on? ")
+                    tty.flush()
+                    user_task = tty.readline().strip()
                 if user_task:
                     clean, injected = self.sanitize_input(user_task)
                     return TaskContext(
@@ -127,50 +124,6 @@ class TaskResolver:
             is_inferred=True,
             confidence=0.3,
         )
-
-    def _check_ai_agent_metadata(self) -> Optional[TaskContext]:
-        """Check for agent metadata or recent task instructions from Claude Code, Gemini CLI, Cursor, etc."""
-        # 1. Claude Code task / state
-        claude_state = self.repo_path / ".claude" / "current_task.json"
-        if claude_state.is_file():
-            try:
-                import json
-                data = json.loads(claude_state.read_text(encoding="utf-8"))
-                desc = data.get("task") or data.get("description")
-                if desc:
-                    clean, injected = self.sanitize_input(str(desc))
-                    return TaskContext(
-                        title=clean.splitlines()[0][:120],
-                        source="agent_hook",
-                        expected_behaviors=[clean],
-                        raw_description=clean,
-                        is_inferred=False,
-                        prompt_injection_detected=injected,
-                        confidence=0.95,
-                    )
-            except Exception:
-                pass
-
-        # 2. Antigravity / Gemini CLI session task
-        gemini_task_file = self.repo_path / ".gemini" / "task.md"
-        if gemini_task_file.is_file():
-            try:
-                content = gemini_task_file.read_text(encoding="utf-8").strip()
-                if content:
-                    clean, injected = self.sanitize_input(content)
-                    return TaskContext(
-                        title=clean.splitlines()[0][:120],
-                        source="agent_hook",
-                        expected_behaviors=[clean],
-                        raw_description=clean,
-                        is_inferred=False,
-                        prompt_injection_detected=injected,
-                        confidence=0.95,
-                    )
-            except Exception:
-                pass
-
-        return None
 
     def _read_task_file(self) -> Optional[TaskContext]:
         """Read and parse repository task file."""

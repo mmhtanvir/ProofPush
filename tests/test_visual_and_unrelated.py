@@ -150,3 +150,25 @@ class TestVisualAndUnrelated(GitRepoTestCase):
         run_command(["git", "commit", "-qm", "remove cart"], cwd=self.local_dir)
         _, del_sha, _ = run_command(["git", "rev-parse", "HEAD"], cwd=self.local_dir)
         self.assertEqual(guard.analyze(both_sha, del_sha.strip()), [])
+
+    def test_scenario_34_secret_patterns_ignore_ordinary_code(self):
+        """Scenario 34: Real keys are caught; identifiers, model IDs and UI copy are not secrets."""
+        from proofpush.utils import SECRET_PATTERNS
+        def hit(text):
+            return any(p.search(text) for p, _ in SECRET_PATTERNS)
+        for ordinary in [
+            '<div class="task-list-item-container-wrapper">',
+            "risk-assessment-for-new-customers()",
+            'model = "claude-opus-4-1-20250805-v1:0"',
+            "// the bearer authentication_middleware_config is used",
+            'password: "Password must be at least 8 characters",',
+        ]:
+            self.assertFalse(hit(ordinary), ordinary)
+        for secret in [
+            "OPENAI=sk-proj-abc123DEF456ghi789JKL012mno345",
+            "sk-ant-api03-AbC123dEf456GhI789jKl012MnO345pQr",
+            "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc123def456",
+            'password = "hunter2secret"',
+            "AKIAIOSFODNN7ABCDEF1",
+        ]:
+            self.assertTrue(hit(secret), secret)

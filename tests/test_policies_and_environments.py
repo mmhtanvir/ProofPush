@@ -6,6 +6,7 @@ Covers:
 - Scenario 14: Baseline that cannot be established
 - Scenario 15: Missing AI provider (local mode fallback)
 - Scenario 32: Force-push from a stale checkout uses the live remote tip as baseline
+- Scenario 35: AI CLIs (even in a PTY) are never prompted and get a named block
 - Scenario 22: Failed critical test under strict mode (exit code 1)
 - Scenario 23: Inconclusive test under advisory mode (exit code 0)
 - Scenario 26: Unavailable browser handled cleanly
@@ -28,7 +29,8 @@ from proofpush.classifier import Finding
 from proofpush.baseline_manager import BaselineManager
 from proofpush.ai_engine import get_ai_adapter
 from proofpush.environment_manager import EnvironmentManager
-from proofpush.utils import run_command
+import os
+from proofpush.utils import AGENT_ENV_VARS, run_command
 
 
 class TestPoliciesAndEnvironments(GitRepoTestCase):
@@ -177,3 +179,21 @@ class TestPoliciesAndEnvironments(GitRepoTestCase):
         env_mgr.cleanup()
         # After cleanup, worktree must be removed
         self.assertFalse(worktree_path.exists())
+
+    def test_scenario_35_ai_cli_never_prompted(self):
+        """Scenario 35: With an AI CLI's env var set, interactive mode blocks instead of prompting."""
+        from unittest import mock
+        enforcer = PolicyEnforcer("interactive", PoliciesConfig(interactive_fallback="block"))
+        findings = [Finding(
+            category="REGRESSION", target="/checkout", before_behavior="ok", after_behavior="broken",
+            expected_behavior="works", actual_result="broken", confidence=0.9, recommended_action="fix",
+            is_critical=True,
+        )]
+        for var, name in [("CLAUDECODE", "Claude Code"), ("GEMINI_CLI", "Gemini CLI"), ("CODEX_SANDBOX", "Codex CLI"), ("CURSOR_AGENT", "Cursor")]:
+            # Start from an env with no agent markers (the suite itself may run inside an AI CLI)
+            clean = {k: v for k, v in os.environ.items() if k not in AGENT_ENV_VARS and k not in ("CI", "PROOFPUSH_NONINTERACTIVE")}
+            with mock.patch.dict(os.environ, {**clean, var: "1"}, clear=True), mock.patch("builtins.open", side_effect=AssertionError("must not open /dev/tty")):
+                decision = enforcer.evaluate(findings=findings)
+            self.assertFalse(decision.allowed)
+            self.assertIn(name, decision.reason)
+

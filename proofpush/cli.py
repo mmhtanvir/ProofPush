@@ -6,6 +6,7 @@ Orchestrates the pre-push workflow, baseline capture, diagnostics, and reports.
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import asyncio
 import webbrowser
@@ -32,9 +33,10 @@ from proofpush.ai_engine import get_ai_adapter
 from proofpush.reporter import ReportGenerator, AuditReportData
 from proofpush.policy_enforcer import PolicyEnforcer
 from proofpush.doctor import Doctor
+from proofpush.utils import detect_unattended
 
 
-console = Console()
+console = Console(soft_wrap=True)
 
 
 @click.group()
@@ -149,10 +151,17 @@ def doctor():
 @click.option("--history-only", is_flag=True, help="Only run git-based checks (past fixes, secrets); skip app and browser")
 def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: Optional[str], mode: Optional[str], history_only: bool):
     """Audit pending or proposed Git push changes."""
+    # AI CLIs kill long-running commands on timeout; exit via SystemExit so `finally` blocks
+    # still remove worktrees and stop the app servers instead of leaking them
+    for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, lambda signum, _frame: sys.exit(128 + signum))
     repo_path = Path.cwd().resolve()
     cfg = load_config(repo_path)
-    if mode:
-        cfg.mode = mode
+    # Hooks can't take flags, so allow a one-off override: PROOFPUSH_MODE=advisory git push
+    env_mode = os.environ.get("PROOFPUSH_MODE", "").lower()
+    if mode or env_mode in ("advisory", "interactive", "strict"):
+        cfg.mode = mode or env_mode
     if full:
         cfg.audit_level = "full"
 
@@ -210,7 +219,7 @@ def _audit_update(
     task_context = task_resolver.resolve(
         explicit_task=explicit_task,
         commit_messages=commit_messages,
-        interactive=(not hook),
+        interactive=True,
     )
 
     # 3. Establish baseline revision
@@ -377,7 +386,7 @@ def _audit_update(
     decision = enforcer.evaluate(
         findings=findings,
         security_result=security_res,
-        is_tty=(not hook),
+        is_tty=None,
     )
 
     # 11. Compile Report
@@ -410,6 +419,15 @@ def _audit_update(
     saved_paths = reporter.save_reports(report_data)
 
     console.print(f"[dim]Evidence saved:[/dim] [cyan]{saved_paths['html']}[/cyan]")
+    if decision.exit_code != 0 and detect_unattended():
+        # Plain text for AI agents reading the push output
+        console.print(
+            f"\n[proofpush] Push blocked for {detect_unattended()}. Full report: {saved_paths['markdown']}\n"
+            "AI agents: do not bypass with --no-verify or by changing ProofPush settings. Fix the findings above, "
+            "or show them to the user and ask how to proceed. The user can approve one push with "
+            "`PROOFPUSH_MODE=advisory git push`.",
+            markup=False,
+        )
 
     return decision.exit_code
 

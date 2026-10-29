@@ -52,7 +52,7 @@ class ReportGenerator:
         self.reports_dir = self.repo_path / ".proofpush" / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self._exclude_from_git()
-        self.console = Console()
+        self.console = Console(soft_wrap=True)
 
     def _exclude_from_git(self) -> None:
         """Keep reports out of `git add -A` via the repo-local .git/info/exclude (never touches .gitignore)."""

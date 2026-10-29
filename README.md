@@ -99,11 +99,34 @@ flowchart LR
 ```
 
 1. **Zero Working Tree Pollution**: Runs baseline vs proposed in isolated temporary Git worktrees on dynamic ports. Your active files are never touched.
-2. **Context-Aware Comparison**: Distinguishes intentional changes from accidental regressions using your commit messages, task files, or AI agent context.
+2. **Context-Aware Comparison**: Distinguishes intentional changes from accidental regressions using your commit messages, a `.proofpush-task.md` file, or the `PROOFPUSH_TASK` environment variable.
 3. **Visual Diffing**: Normalizes viewport dimensions, freezes animations, and generates visual bounding boxes for shifted elements.
 4. **Leak Guard**: Scans diffs for leaked secrets (`sk-...`, AWS keys, tokens) and flags deleted test suites.
 5. **Chains Existing Hooks**: Preserves your existing pre-push hooks by automatically backing them up and chaining them.
 6. **Fixed Bugs Stay Fixed (zero config)**: Reads your Git history for past fix commits (`fix`, `bug`, `hotfix`, ...) touching the files you're pushing, and flags the push if it brings their buggy code back. Works in any language or framework, no setup. Pushes to an existing branch are compared against what is live on it now, so a force-push from a stale checkout can't hide a reverted fix. Add `guard: true` workflows to pin specific bugs in the browser too.
+
+---
+
+## 🤖 AI Coding Agents
+
+ProofPush runs inside `git push`, so it works with any AI CLI that pushes: Claude Code, Codex CLI, Gemini CLI, Cursor, Aider, Copilot CLI and others. No plugin needed.
+
+- **Never hangs an agent.** In `interactive` mode a person at a terminal is asked `Approve push anyway?` (via `/dev/tty`, since git uses the hook's stdin). Agents are never prompted: anything without a terminal is treated as unattended, and these are detected even when they run commands in a real PTY:
+
+  | Env var | Tool |
+  |---|---|
+  | `CLAUDECODE` | Claude Code |
+  | `GEMINI_CLI` | Gemini CLI |
+  | `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED` | Codex CLI |
+  | `CURSOR_AGENT` | Cursor |
+  | `CI` | CI runners |
+  | `PROOFPUSH_NONINTERACTIVE=1` | Anything else: set it in your agent's environment |
+
+- **Blocks with instructions the agent can act on.** Unattended pushes with findings are blocked (`policies.interactive_fallback: block`, the default). The output names the agent, points to the Markdown report, and tells it to fix the findings or ask you, and not to bypass with `--no-verify`.
+- **You approve one push** with `PROOFPUSH_MODE=advisory git push` (hooks can't take flags, so `PROOFPUSH_MODE` overrides the mode for that push).
+- **Tell ProofPush what the agent was doing**: `PROOFPUSH_TASK="Add coupon support" git push`, or write `.proofpush-task.md`.
+- **Survives agent timeouts.** If the agent kills the push, ProofPush still removes its temporary worktrees and stops the app servers.
+- **Works from GUI-launched tools** whose PATH lacks `proofpush`: the hook remembers the install path.
 
 ---
 
@@ -227,7 +250,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 33-scenario test suite |
+| `proofpush test` | Runs the built-in 35-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -243,11 +266,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 33 real-world developer scenarios:
+ProofPush is tested against 35 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 33 tests in 12s (OK)
+# Ran 35 tests in 12s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

@@ -9,22 +9,63 @@ import os
 import re
 import socket
 import hashlib
+import io
 import subprocess
+import sys
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 
 
 SECRET_PATTERNS = [
-    # OpenAI / Claude / standard API keys
-    (re.compile(r'(sk-[a-zA-Z0-9_\-]{20,})', re.IGNORECASE), '[REDACTED_API_KEY]'),
-    (re.compile(r'(claude-[a-zA-Z0-9_\-]{20,})', re.IGNORECASE), '[REDACTED_API_KEY]'),
-    (re.compile(r'(ghp_[a-zA-Z0-9]{36,})', re.IGNORECASE), '[REDACTED_GITHUB_TOKEN]'),
-    (re.compile(r'(github_pat_[a-zA-Z0-9_]{50,})', re.IGNORECASE), '[REDACTED_GITHUB_PAT]'),
-    (re.compile(r'(AKIA[0-9A-Z]{16})', re.IGNORECASE), '[REDACTED_AWS_KEY_ID]'),
-    (re.compile(r'(bearer\s+[a-zA-Z0-9_\-\.]{20,})', re.IGNORECASE), 'Bearer [REDACTED_TOKEN]'),
+    # OpenAI / Anthropic (sk-ant-...) / standard API keys: standalone token containing a digit,
+    # so identifiers like `task-list-item-container` or `risk-assessment-...` don't match
+    (re.compile(r'(?<![A-Za-z0-9_\-])(sk-(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{20,})'), '[REDACTED_API_KEY]'),
+    (re.compile(r'(ghp_[a-zA-Z0-9]{36,})'), '[REDACTED_GITHUB_TOKEN]'),
+    (re.compile(r'(github_pat_[a-zA-Z0-9_]{50,})'), '[REDACTED_GITHUB_PAT]'),
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})\b'), '[REDACTED_AWS_KEY_ID]'),
+    (re.compile(r'(bearer\s+(?=[a-zA-Z0-9_\-\.]*\d)[a-zA-Z0-9_\-\.]{20,})', re.IGNORECASE), 'Bearer [REDACTED_TOKEN]'),
     (re.compile(r'-----BEGIN [A-Z ]+ PRIVATE KEY-----[^-]+-----END [A-Z ]+ PRIVATE KEY-----', re.DOTALL), '[REDACTED_PRIVATE_KEY]'),
-    (re.compile(r'(password|passwd|secret|api_key|access_token|private_key)\s*[:=]\s*["\']([^"\']{6,})["\']', re.IGNORECASE), r'\1: "[REDACTED_CREDENTIAL]"'),
+    # Quoted value without spaces, so UI copy like "Password must be 8 characters" isn't a credential
+    (re.compile(r'(password|passwd|secret|api_key|access_token|private_key)\s*[:=]\s*["\']([^"\'\s]{6,})["\']', re.IGNORECASE), r'\1: "[REDACTED_CREDENTIAL]"'),
 ]
+
+
+# Set by AI coding CLIs in the shells they run. Some (Gemini CLI, Cursor) use a real PTY,
+# so isatty() alone can't tell an agent from a person.
+AGENT_ENV_VARS = {
+    "CLAUDECODE": "Claude Code",
+    "GEMINI_CLI": "Gemini CLI",
+    "CODEX_SANDBOX": "Codex CLI",
+    "CODEX_SANDBOX_NETWORK_DISABLED": "Codex CLI",
+    "CURSOR_AGENT": "Cursor",
+}
+
+
+def detect_unattended() -> Optional[str]:
+    """Name of the AI agent / automation running this push, or None for a person at a terminal."""
+    if os.environ.get("PROOFPUSH_NONINTERACTIVE"):
+        return "PROOFPUSH_NONINTERACTIVE"
+    for var, name in AGENT_ENV_VARS.items():
+        if os.environ.get(var):
+            return name
+    if os.environ.get("CI"):
+        return "CI"
+    return None
+
+
+def open_user_terminal():
+    """Read/write handle to the person's terminal, or None when unattended.
+
+    Inside a git hook stdin is the ref list, so prompts must go through /dev/tty.
+    """
+    if detect_unattended() or not (sys.stderr.isatty() or sys.stdout.isatty()):
+        return None
+    try:
+        # Text "r+" mode needs a seekable file; a terminal isn't, so wrap the raw device
+        raw = open("/dev/tty", "r+b", buffering=0)
+        return io.TextIOWrapper(raw, encoding="utf-8", line_buffering=True, write_through=True)
+    except OSError:
+        return None
 
 
 def redact_secrets(text: str) -> str:
