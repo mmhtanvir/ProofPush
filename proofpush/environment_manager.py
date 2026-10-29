@@ -21,7 +21,7 @@ from typing import Any, Optional, List
 import subprocess
 
 from proofpush.config import ApplicationConfig, ServiceConfig
-from proofpush.utils import find_free_port, run_command, urlopen
+from proofpush.utils import find_free_port, is_port_open, run_command, urlopen
 
 
 @dataclass
@@ -261,6 +261,7 @@ class EnvironmentManager:
 
         deadline = time.time() + service_cfg.health_timeout
         ready = False
+        last_error = "no response yet"
         while time.time() < deadline:
             # Check if process died
             ret = proc.poll()
@@ -280,14 +281,19 @@ class EnvironmentManager:
                 if http_err.code in (200, 204, 301, 302, 304, 401, 403):
                     ready = True
                     break
-            except Exception:
+                last_error = f"HTTP {http_err.code} on the health check path"
+                time.sleep(0.3)
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
                 time.sleep(0.3)
 
         if ready:
             instance.is_ready = True
         else:
             log_content = log_path.read_text(encoding="utf-8", errors="ignore")[-2000:]
-            instance.error_message = f"Health check timed out after {service_cfg.health_timeout}s on {health_url}. Log:\n{log_content}"
+            listening = "something is listening on the port" if is_port_open(port) else "nothing is listening on the port"
+            instance.error_message = (f"Health check timed out after {service_cfg.health_timeout}s on {health_url} "
+                                      f"(last error: {last_error}; {listening}). Log:\n{log_content}")
 
         return instance
 
