@@ -5,6 +5,8 @@ sitemaps, static files, and browser crawling.
 Detects added, removed, erroring, and redirected routes.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 from typing import List, Set, Dict, Any, Optional

@@ -10,6 +10,8 @@ Resolves the intended task and expected behavior from:
 Includes protection against prompt injection in commit messages and task descriptions.
 """
 
+from __future__ import annotations
+
 import os
 import re
 from dataclasses import dataclass, field

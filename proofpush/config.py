@@ -3,6 +3,8 @@ Configuration management for ProofPush.
 Loads .proofpush.yml / .proofpush.yaml or falls back to sane defaults.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, List, Optional

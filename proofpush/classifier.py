@@ -4,6 +4,8 @@ Compares observed website behavior between baseline and proposed versions,
 evaluates findings against task context, and classifies outcomes into standard categories.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 

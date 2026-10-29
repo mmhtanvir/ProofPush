@@ -4,6 +4,8 @@ Executes browser operations, workflows, route visits, console error tracking,
 network failure monitoring, and safe interactive element inspection.
 """
 
+from __future__ import annotations
+
 import asyncio
 import re
 from dataclasses import dataclass, field

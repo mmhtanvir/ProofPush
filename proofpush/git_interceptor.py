@@ -4,6 +4,8 @@ Handles pre-push hook installation, ref parsing from stdin, outgoing commit disc
 hook chaining, worktree awareness, and recursion prevention.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import stat

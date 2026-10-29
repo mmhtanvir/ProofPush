@@ -4,6 +4,8 @@ Inspects outgoing Git diffs, classifies modified files according to the task con
 detects hardcoded secrets, deleted test cases, altered auth logic, and unexpected changes.
 """
 
+from __future__ import annotations
+
 import re
 import fnmatch
 from dataclasses import dataclass, field

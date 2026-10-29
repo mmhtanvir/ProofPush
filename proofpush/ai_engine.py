@@ -5,6 +5,8 @@ with an optional OpenAI adapter.
 Enforces secret redaction and disclosures before sending data.
 """
 
+from __future__ import annotations
+
 import os
 import json
 import urllib.request

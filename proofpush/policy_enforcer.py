@@ -4,6 +4,8 @@ Evaluates findings against the configured mode (advisory, interactive, strict)
 and determines whether to allow (exit 0) or block (exit 1) the Git push.
 """
 
+from __future__ import annotations
+
 import sys
 import webbrowser
 from dataclasses import dataclass

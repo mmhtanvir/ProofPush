@@ -3,6 +3,8 @@ Command Line Interface for ProofPush.
 Orchestrates the pre-push workflow, baseline capture, diagnostics, and reports.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import asyncio

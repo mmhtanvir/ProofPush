@@ -4,6 +4,8 @@ Handles establishing, capturing, storing, and loading baseline metadata.
 Ensures we compare against a true prior working revision rather than the dirty working tree.
 """
 
+from __future__ import annotations
+
 import os
 import json
 import time

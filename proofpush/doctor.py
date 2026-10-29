@@ -3,6 +3,8 @@ System Health and Diagnostic Doctor.
 Checks environment, dependencies, Git hooks, Playwright browsers, and configuration.
 """
 
+from __future__ import annotations
+
 import sys
 import shutil
 from pathlib import Path

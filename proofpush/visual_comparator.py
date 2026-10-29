@@ -4,6 +4,8 @@ Performs pixel and structural difference calculations between baseline and propo
 handles viewport normalization, dynamic element masking, diff highlighting, and bounding boxes.
 """
 
+from __future__ import annotations
+
 import io
 from dataclasses import dataclass, field
 from pathlib import Path

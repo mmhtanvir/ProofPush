@@ -4,6 +4,8 @@ Creates isolated Git worktrees, starts baseline and proposed application instanc
 monitors readiness/health, manages process lifecycles, and cleans up temporary resources.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import time

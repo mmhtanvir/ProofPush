@@ -7,6 +7,8 @@ Generates:
 4. Interactive standalone HTML Evidence Viewer (.html)
 """
 
+from __future__ import annotations
+
 import os
 import json
 import time

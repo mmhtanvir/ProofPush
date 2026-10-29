@@ -3,6 +3,8 @@ Utility helpers for ProofPush.
 Includes port finding, process execution, secret redaction, and serialization.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import socket
