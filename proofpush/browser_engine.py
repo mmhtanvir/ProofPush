@@ -12,7 +12,7 @@ import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from typing import List, Dict, Any, Optional
 
 
@@ -101,6 +101,7 @@ class PageVisitResult:
     error_message: Optional[str] = None
     passed: bool = True
     layout: Dict[str, Any] = field(default_factory=dict)  # responsive-layout and load-speed measurements
+    api_calls: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # "GET /api/x/:id" -> status, ms, JSON shape
 
 
 @dataclass
@@ -133,6 +134,7 @@ class InteractionResult:
     layout_shift: float = 0.0
     console_errors: List[str] = field(default_factory=list)
     locator: Dict[str, Any] = field(default_factory=dict)  # how to find it again (testid / id / role + label)
+    api_errors: List[str] = field(default_factory=list)  # backend calls the click made that failed, e.g. "POST /api/star -> 500"
 
     @property
     def had_effect(self) -> bool:
@@ -174,6 +176,48 @@ _MEASURE_JS = r"""() => {
   try { new PerformanceObserver(l => l.getEntries().forEach(e => { if (e.startTime >= m.start) m.blocking += Math.max(0, e.duration - 50); })).observe({type: 'longtask', buffered: true}); } catch (e) {}
   try { new PerformanceObserver(l => l.getEntries().forEach(e => { if (!e.hadRecentInput && e.startTime >= m.start) m.shift += e.value; })).observe({type: 'layout-shift', buffered: true}); } catch (e) {}
 }"""
+
+
+_ID_SEGMENT = re.compile(r"^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{24}|[0-9a-f]{32,})$", re.I)
+
+
+def api_key(method: str, url: str) -> str:
+    """'GET /api/patients/:id?page=': ids and query values dropped so the same call matches across versions."""
+    parsed = urlparse(url)
+    path = "/".join(":id" if _ID_SEGMENT.match(seg) else seg for seg in parsed.path.split("/"))
+    query = "&".join(sorted(f"{k}=" for k in parse_qs(parsed.query)))
+    return f"{method} {path}" + (f"?{query}" if query else "")
+
+
+def json_shape(data: Any) -> Dict[str, Any]:
+    """Field names and list sizes of a JSON response: enough to notice fields or data disappearing."""
+    if isinstance(data, dict):
+        return {"keys": sorted(data)[:100], "lists": {k: len(v) for k, v in data.items() if isinstance(v, list)}}
+    if isinstance(data, list):
+        first = data[0] if data and isinstance(data[0], dict) else {}
+        return {"keys": sorted(first)[:100], "length": len(data)}
+    return {}
+
+
+async def _record_api_call(req, into: Dict[str, Dict[str, Any]]) -> None:
+    """Status, time and JSON shape of one finished XHR/fetch call (the page's backend requests)."""
+    if req.resource_type not in ("xhr", "fetch", "document"):
+        return
+    resp = await req.response()
+    if resp is None:
+        return
+    if req.resource_type == "document" and "json" not in (resp.headers.get("content-type") or ""):
+        return  # HTML pages are judged by the page checks; JSON routes (API-only backends) are API calls
+    call = {"status": resp.status, "ms": round(req.timing.get("responseEnd", 0) or 0)}
+    if "json" in (resp.headers.get("content-type") or ""):
+        try:
+            call.update(json_shape(await resp.json()))
+        except Exception:
+            pass
+    key = api_key(req.method, req.url)
+    # Keep the worst outcome if a call repeats on the page
+    if key not in into or call["status"] > into[key]["status"]:
+        into[key] = call
 
 
 # Installed before any page script runs: what loading the page cost (biggest paint, jank, layout jumps)
@@ -229,6 +273,8 @@ class BrowserEngine:
         self._loop = None
         # Logged-in browser state (cookies, localStorage) per base URL, from login()
         self.sessions: Dict[str, Dict[str, Any]] = {}
+        # Sent with every request (e.g. an API token for backends without a login page)
+        self.extra_headers: Dict[str, str] = {}
 
     @asynccontextmanager
     async def _shared_browser(self):
@@ -276,7 +322,7 @@ class BrowserEngine:
         async with self._shared_browser() as browser:
             context = await browser.new_context(
                 viewport=vp,
-                ignore_https_errors=True,
+                ignore_https_errors=True, extra_http_headers=self.extra_headers or None,
                 user_agent="proofpush-functional-agent",
                 storage_state=self.sessions.get(base_url),
             )
@@ -318,6 +364,9 @@ class BrowserEngine:
 
             page.on("requestfailed", on_request_failed)
             page.on("response", on_response)
+            api_calls: Dict[str, Dict[str, Any]] = {}
+            pending: List[Any] = []
+            page.on("requestfinished", lambda req: pending.append(asyncio.ensure_future(_record_api_call(req, api_calls))))
 
             try:
                 resp = await page.goto(full_url, timeout=self.timeout, wait_until="domcontentloaded")
@@ -330,6 +379,8 @@ class BrowserEngine:
                     layout = await page.evaluate(_LAYOUT_JS)
                 except Exception:
                     layout = {}
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
 
                 title = await page.title()
                 dom_text = await page.evaluate("() => document.body ? document.body.innerText.substring(0, 500) : ''")
@@ -402,6 +453,7 @@ class BrowserEngine:
                     dom_text_snippet=dom_text,
                     passed=is_pass,
                     layout=layout,
+                    api_calls=api_calls,
                 )
 
             except Exception as exc:
@@ -462,7 +514,7 @@ class BrowserEngine:
                 login_url = f"{base_url.rstrip('/')}{auth.login_path}"
                 # 1. A session saved by `proofpush login` (needed for SMS/email codes, SSO, captchas)
                 if saved_session and saved_session.is_file():
-                    context = await browser.new_context(ignore_https_errors=True, user_agent="proofpush-functional-agent",
+                    context = await browser.new_context(ignore_https_errors=True, extra_http_headers=self.extra_headers or None, user_agent="proofpush-functional-agent",
                                                         storage_state=retarget_session(saved_session, base_url))
                     page = await context.new_page()
                     # Still valid if a page behind the login doesn't bounce us to a login form
@@ -477,7 +529,7 @@ class BrowserEngine:
                     return "No test account credentials or saved session"
 
                 # 2. Automated login with the test account
-                context = await browser.new_context(ignore_https_errors=True, user_agent="proofpush-functional-agent")
+                context = await browser.new_context(ignore_https_errors=True, extra_http_headers=self.extra_headers or None, user_agent="proofpush-functional-agent")
                 page = await context.new_page()
                 await page.goto(login_url, timeout=self.timeout, wait_until="domcontentloaded")
                 values = {"{username}": creds.username, "{password}": creds.password}
@@ -597,7 +649,7 @@ class BrowserEngine:
         url = f"{base_url.rstrip('/')}{route}"
         results: Dict[str, InteractionResult] = {}
         async with self._shared_browser() as browser:
-            context = await browser.new_context(viewport=viewport or {"width": 1280, "height": 800}, ignore_https_errors=True,
+            context = await browser.new_context(viewport=viewport or {"width": 1280, "height": 800}, ignore_https_errors=True, extra_http_headers=self.extra_headers or None,
                                                 user_agent="proofpush-functional-agent", storage_state=self.sessions.get(base_url))
             try:
                 page = await context.new_page()
@@ -649,6 +701,10 @@ class BrowserEngine:
         def on_error(e):
             res.console_errors.append(str(e))
 
+        def on_response(r):
+            if r.request.resource_type in ("xhr", "fetch") and r.status >= 400:
+                res.api_errors.append(f"{api_key(r.request.method, r.url)} -> {r.status}")
+
         try:
             target = self._locator(page, c)
             if await target.count() == 0:
@@ -657,6 +713,7 @@ class BrowserEngine:
             page.on("request", on_request)
             page.on("console", on_console)
             page.on("pageerror", on_error)
+            page.on("response", on_response)
             await page.evaluate(_MEASURE_JS)
             before_url = page.url
             await target.click(timeout=3000)
@@ -673,6 +730,7 @@ class BrowserEngine:
                 # Toggles (star, like, switch, menu): click again so the test leaves state as it found it
                 if (res.mutations or requests) and await target.count():
                     page.remove_listener("request", on_request)
+                    page.remove_listener("response", on_response)
                     try:
                         await page.evaluate(_MEASURE_JS)
                         await target.click(timeout=2000)
@@ -682,7 +740,8 @@ class BrowserEngine:
         except Exception as exc:
             res.error = str(exc).splitlines()[0][:200]
         finally:
-            for event, handler in (("request", on_request), ("console", on_console), ("pageerror", on_error)):
+            for event, handler in (("request", on_request), ("console", on_console), ("pageerror", on_error),
+                                   ("response", on_response)):
                 try:
                     page.remove_listener(event, handler)
                 except Exception:
@@ -705,7 +764,7 @@ class BrowserEngine:
         async with self._shared_browser() as browser:
             context = await browser.new_context(
                 viewport=vp,
-                ignore_https_errors=True,
+                ignore_https_errors=True, extra_http_headers=self.extra_headers or None,
                 user_agent="proofpush-workflow-runner",
                 storage_state=self.sessions.get(base_url),
             )

@@ -199,6 +199,10 @@ class RegressionClassifier:
             problems.append(f"'{label}' stopped working: clicking it no longer changes anything")
             category, critical = "REGRESSION", True
         else:
+            backend = [e for e in prop.api_errors if e not in base.api_errors]
+            if backend:
+                problems.append(f"'{label}' now fails on the backend: {', '.join(backend[:3])}")
+                category, critical = "REGRESSION", True
             new_errors = [e for e in prop.console_errors if e not in base.console_errors]
             if new_errors:
                 problems.append(f"'{label}' now throws errors when clicked: {new_errors[0][:120]}")
@@ -271,6 +275,45 @@ class RegressionClassifier:
             confidence=0.8,
             recommended_action=f"Open {where} at that screen size in the new version and compare with the live one.",
             is_critical=bool(broken),
+        )
+
+    def classify_api(self, page: str, base: Dict[str, Dict[str, Any]], prop: Dict[str, Dict[str, Any]]) -> Optional[Finding]:
+        """Backend calls a page makes, old vs new: tells a backend break apart from a frontend one."""
+        broken, warn = [], []
+        for key, b in base.items():
+            p = prop.get(key)
+            if p is None:
+                continue  # the page no longer makes this call: a frontend change, judged by the page checks
+            if b["status"] < 400 <= p["status"]:
+                broken.append(f"{key} now returns {p['status']} (was {b['status']})")
+                continue
+            lost = [k for k in b.get("keys", []) if k not in set(p.get("keys", []))]
+            if lost:
+                warn.append(f"{key} no longer returns fields: {', '.join(lost[:6])}")
+            if b.get("length", 0) > 0 and p.get("length") == 0:
+                warn.append(f"{key} now returns an empty list (was {b['length']} items)")
+            for name, n in b.get("lists", {}).items():
+                if n > 0 and p.get("lists", {}).get(name) == 0:
+                    warn.append(f"{key} now returns an empty '{name}' (was {n} items)")
+            if b.get("ms") and p.get("ms") and p["ms"] > max(2 * b["ms"], b["ms"] + 500):
+                warn.append(f"{key} got slower: {b['ms']} ms -> {p['ms']} ms")
+        for key, p in prop.items():
+            if key not in base and p["status"] >= 500:
+                broken.append(f"{key} (new call) fails with {p['status']}")
+        problems = broken + warn
+        if not problems:
+            return None
+        return Finding(
+            category="REGRESSION" if broken else "POSSIBLE_REGRESSION",
+            target=f"Backend (seen on {page})",
+            before_behavior="The page's API calls succeeded with the same data shape",
+            after_behavior="; ".join(problems),
+            expected_behavior="Backend responses keep their status, fields, data and speed",
+            actual_result=problems[0],
+            confidence=0.85,
+            recommended_action="The backend changed, not just the page: check the API handler behind each call listed.",
+            is_critical=bool(broken),
+            reproduction_steps=[f"Open {page}", f"Watch the network tab for: {problems[0].split(' ')[0]} {problems[0].split(' ')[1]}"],
         )
 
     def classify_workflow(

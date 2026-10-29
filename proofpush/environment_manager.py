@@ -47,6 +47,9 @@ class AppEnvironment:
     startup_error: Optional[str] = None
 
 
+DEPENDENCY_DIRS = ("node_modules", ".venv", "venv", "env", "vendor", ".bundle")
+
+
 class EnvironmentManager:
     def __init__(self, repo_path: Path, app_config: ApplicationConfig):
         self.repo_path = repo_path.resolve()
@@ -73,7 +76,28 @@ class EnvironmentManager:
             # Fallback for bare repos or shallow clones: try checkout or clone
             raise RuntimeError(f"Failed to create Git worktree for revision {revision}: {err or out}")
 
+        self._link_local_files(temp_dir)
         return temp_dir
+
+    def _link_local_files(self, worktree: Path) -> None:
+        """Give the checkout what git doesn't track but apps need to start: installed dependencies and .env files.
+
+        Limit: both versions share the dependencies installed in your working copy; if a push changes them,
+        run your install command first.
+        """
+        names = list(DEPENDENCY_DIRS) + [f"{p.parent.name}/{p.name}" for p in self.repo_path.glob("*/node_modules")]
+        names += [p.name for p in self.repo_path.glob(".env*") if p.is_file() and not p.name.endswith((".example", ".sample", ".template"))]
+        for name in names:
+            src, dst = self.repo_path / name, worktree / name
+            if not src.exists() or dst.exists() or not dst.parent.is_dir():
+                continue
+            try:
+                os.symlink(src, dst, target_is_directory=src.is_dir())
+            except OSError:
+                if src.is_dir() and sys.platform == "win32":
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(dst), str(src)], capture_output=True)  # junction: no admin needed
+                elif src.is_file():
+                    shutil.copy2(src, dst)
 
     def launch_environment(self, revision: str, label: str) -> AppEnvironment:
         """Set up and start an isolated application environment."""

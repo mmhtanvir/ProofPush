@@ -58,6 +58,7 @@ class TestNotify(GitRepoTestCase):
             notifier.notify(NotifyConfig(desktop=False, webhook_env="TEAM_HOOK"), self.local_dir,
                             "ProofPush blocked a push to main", "shop: secret AKIAIOSFODNN7ABCDEF1 found", {"event": "push_blocked"})
         server.shutdown()
+        server.server_close()
         self.assertEqual(received[0]["event"], "push_blocked")
         self.assertNotIn("AKIAIOSFODNN7ABCDEF1", received[0]["text"])  # redacted before leaving the machine
 

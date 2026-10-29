@@ -126,7 +126,16 @@ class Doctor:
             checks.append({"name": "Secrets File", "passed": not loose,
                            "detail": "readable only by you" if not loose else f"readable by others: run `chmod 600 {secrets_env}`"})
 
-        # 10. Baseline store check
+        # 10. Project test suite (run on both versions when enabled)
+        if in_repo:
+            from proofpush.test_suite import detect_test_command
+            detected = cfg.tests.command or detect_test_command(self.repo_path)
+            if detected:
+                checks.append({"name": "Project Tests", "passed": True,
+                               "detail": f"{'enabled' if cfg.tests.enabled else 'found, off'}: {detected}"
+                                         + ("" if cfg.tests.enabled else "  (turn on: tests: {enabled: true})")})
+
+        # 11. Baseline store check
         if in_repo:
             bm = BaselineManager(self.repo_path)
             baselines = bm.list_baselines()

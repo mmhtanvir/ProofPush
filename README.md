@@ -233,6 +233,38 @@ Safety: it never clicks anything that sounds destructive or data-changing (delet
 
 ---
 
+## 🔌 Backend Breaks, Not Just Frontend
+
+A page can look broken because the **backend** changed. ProofPush records every API call each page (and each clicked button) makes, in both versions, and tells you when the backend is the cause:
+
+| Finding | Example |
+|---|---|
+| Call now errors | `Backend (seen on /patients): GET /api/patients/:id now returns 500 (was 200)` |
+| Fields missing | `GET /api/profile no longer returns fields: email` |
+| Data gone | `GET /api/orders now returns an empty 'items' (was 12 items)` |
+| Slower | `GET /api/search got slower: 120 ms -> 2400 ms` |
+| Button fails server-side | `'Star' now fails on the backend: POST /api/star -> 500` |
+
+**API-only backends** (no pages): routes that return JSON are compared the same way. Routes are discovered from FastAPI, Flask, Express and Django `urls.py`; add others to `routes.base_routes`. If the API needs a token:
+
+```yaml
+api_headers:
+  Authorization: "Bearer {API_TOKEN}"   # API_TOKEN from your environment or .proofpush/secrets.env
+```
+
+**The project's own tests, on both versions** (backend logic, calculations, jobs, emails: whatever your tests cover). A test that passed before and fails now is a regression, named in the report. Detected automatically: `npm test`, `pytest`, `manage.py test`, `go test`, `cargo test`.
+
+```yaml
+tests:
+  enabled: true          # opt-in: some runners (e.g. Django) create a database on the server your app points at
+  # command: "npm run test:unit"
+  # timeout: 600
+```
+
+Each version runs in a temporary checkout with your installed dependencies (`node_modules`, `.venv`, ...) and `.env` files linked in, so real apps and test suites start without reinstalling.
+
+---
+
 ## 📱 Responsive Layout and Load Speed
 
 Every checked page is compared between the old and new version at **each screen size** in `visual.viewports` (desktop and mobile by default; add a tablet with `- {width: 768, height: 1024, name: tablet}`). Only what the new version made worse is reported:
@@ -425,7 +457,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 61-scenario test suite |
+| `proofpush test` | Runs the built-in 64-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -441,11 +473,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 61 real-world developer scenarios:
+ProofPush is tested against 64 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 61 tests in 30s (OK)
+# Ran 64 tests in 40s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

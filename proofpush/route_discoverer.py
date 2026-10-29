@@ -80,6 +80,15 @@ class RouteDiscoverer:
             r"""(?:@app\.(?:get|route)|@router\.(?:get|route)|app\.get|router\.get)\s*\(\s*["'](/[^"']*)["']""",
             re.IGNORECASE
         )
+        # Django: path("api/patients/", ...) in urls.py (parameterised <int:pk> routes skipped)
+        django_regex = re.compile(r"""\b(?:re_)?path\(\s*r?["']\^?([^"'<(]*?)\$?["']""")
+        for f in target_dir.glob("**/urls.py"):
+            if any(part in SKIP_DIRS for part in f.relative_to(target_dir).parts):
+                continue
+            for match in django_regex.finditer(f.read_text(encoding="utf-8", errors="ignore")):
+                if match.group(1) and "include" not in match.group(0):
+                    routes.add("/" + match.group(1).lstrip("/"))
+
         for ext in ["*.py", "*.js", "*.ts"]:
             for f in target_dir.glob(f"**/{ext}"):
                 if any(part in SKIP_DIRS for part in f.relative_to(target_dir).parts):

@@ -19,14 +19,14 @@ from rich.console import Console
 from rich.table import Table
 
 from proofpush import __version__
-from proofpush.config import load_config, resolve_account, session_file, AuditorConfig
+from proofpush.config import load_config, resolve_account, resolve_headers, session_file, AuditorConfig
 from proofpush.git_interceptor import GitInterceptor, PushRefUpdate
 from proofpush.task_resolver import TaskResolver
 from proofpush.baseline_manager import BaselineManager, BaselineMetadata
 from proofpush.environment_manager import EnvironmentManager
 from proofpush.route_discoverer import RouteDiscoverer
 from proofpush.fix_history import FixHistoryGuard
-from proofpush import notifier, push_rules
+from proofpush import notifier, push_rules, test_suite
 from proofpush.browser_engine import BrowserEngine
 from proofpush.visual_comparator import VisualComparator
 from proofpush.unrelated_analyzer import UnrelatedAnalyzer
@@ -208,6 +208,19 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     sys.exit(max(codes))
 
 
+def _compare_test_suites(cfg: AuditorConfig, base_dir: Path, prop_dir: Path) -> List[Finding]:
+    """The project's own tests on both versions (backend logic included): newly failing tests are regressions."""
+    if not cfg.tests.enabled:
+        return []
+    command = cfg.tests.command or test_suite.detect_test_command(prop_dir)
+    if not command:
+        return [_blocked("Test suite", "tests.enabled is on but no test command was found; set tests.command")]
+    console.print(f"Running the project's tests on both versions: {command}", markup=False)
+    before = test_suite.run_suite(base_dir, command, cfg.tests.timeout)
+    after = test_suite.run_suite(prop_dir, command, cfg.tests.timeout)
+    return test_suite.compare_suites(before, after)
+
+
 async def _compare_clicks(engine, classifier, cfg, route, before_url, after_url, viewport, where=None) -> List[Finding]:
     """Click the same safe elements on both versions of a page; report ones that broke, vanished, slowed or got janky."""
     opts = cfg.interactions
@@ -292,9 +305,18 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
         security_res = UnrelatedAnalyzer(repo_path, sensitive_globs=cfg.security.sensitive_paths).analyze_changes(
             base_sha=base_sha, proposed_sha=candidate_sha, task_context=task_context)
 
+    if cfg.tests.enabled and not problem:
+        gate_env = EnvironmentManager(repo_path, cfg.application)
+        try:
+            findings.extend(_compare_test_suites(cfg, gate_env.create_worktree(base_sha, "live"),
+                                                 gate_env.create_worktree(candidate_sha, "candidate")))
+        finally:
+            gate_env.cleanup()
+
     pages = 0
     if base_url and candidate_url:
         engine = BrowserEngine(headless=True)
+        engine.extra_headers = resolve_headers(repo_path, cfg.api_headers)
         excluded = RouteDiscoverer(repo_path, cfg.routes.base_routes, cfg.routes.excluded_routes)._is_excluded
         classifier = RegressionClassifier(task_context)
 
@@ -321,6 +343,9 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
                 pages += 1
                 findings.append(classifier.classify_route_visit(route, live.get(route), cand.get(route)))
                 if route in live and route in cand:
+                    api_finding = classifier.classify_api(route, live[route].api_calls, cand[route].api_calls)
+                    if api_finding:
+                        findings.append(api_finding)
                     layout_finding = classifier.classify_layout(route, live[route].layout, cand[route].layout)
                     if layout_finding:
                         findings.append(layout_finding)
@@ -413,6 +438,7 @@ def check(env_name: str):
         sys.exit(2)
 
     engine = BrowserEngine(headless=True)
+    engine.extra_headers = resolve_headers(repo_path, cfg.api_headers)
     excluded = RouteDiscoverer(repo_path, cfg.routes.base_routes, cfg.routes.excluded_routes)._is_excluded
     findings: List[Finding] = []
     pages = 0
@@ -585,6 +611,7 @@ def _audit_update(
             # Launch proposed environment
             console.print("Launching isolated proposed environment...")
             prop_env = env_mgr.launch_environment(proposed_sha, label="proposed")
+            findings.extend(_compare_test_suites(cfg, base_env.worktree_path, prop_env.worktree_path))
 
             if not base_env.is_ready or not prop_env.is_ready:
                 err_msg = prop_env.startup_error or base_env.startup_error or "Application failed to become ready"
@@ -625,6 +652,7 @@ def _audit_update(
                 base_url_p = prop_env.frontend.base_url
 
                 browser_engine = BrowserEngine(headless=True)
+                browser_engine.extra_headers = resolve_headers(repo_path, cfg.api_headers)
                 vis_comparator = VisualComparator(
                     diff_threshold=cfg.visual.diff_threshold,
                     reports_dir=repo_path / ".proofpush" / "reports"
@@ -712,6 +740,11 @@ def _audit_update(
                                 if vis_res and not vis_res.passed:
                                     findings.append(classifier.classify_route_visit(
                                         route=at(r, vp), base_result=before, prop_result=after, visual_result=vis_res))
+                            # Backend calls behind the page (first screen size is enough: same calls at every size)
+                            if vp is first:
+                                api_finding = classifier.classify_api(r, before.api_calls, after.api_calls)
+                                if api_finding:
+                                    findings.append(api_finding)
                             # Responsive layout + load speed: sideways scroll, off-screen/overlapping controls, slower loads
                             layout_finding = classifier.classify_layout(at(r, vp), before.layout, after.layout)
                             if layout_finding:

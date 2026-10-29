@@ -151,6 +151,15 @@ class InteractionsConfig:
 
 
 @dataclass
+class TestsConfig:
+    # Run the project's own tests on both versions; tests that passed before and fail now are regressions.
+    # Opt-in: some test runners (e.g. Django) create databases on whatever server the app is configured for.
+    enabled: bool = False
+    command: str = ""  # default: detected (npm test, pytest, manage.py test, go test, cargo test)
+    timeout: int = 600
+
+
+@dataclass
 class NotifyConfig:
     desktop: bool = True  # OS notification when nobody is watching a terminal (GUI/agent pushes, scheduled checks)
     webhook_env: str = ""  # name of the env var / secrets.env key holding a Slack, Discord or generic webhook URL
@@ -173,6 +182,9 @@ class AuditorConfig:
     environments: Dict[str, str] = field(default_factory=dict)  # name -> live base URL, e.g. prod
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     interactions: InteractionsConfig = field(default_factory=InteractionsConfig)
+    # Headers sent with every request, e.g. {"Authorization": "Bearer {API_TOKEN}"}; {NAME} is read like other secrets
+    api_headers: Dict[str, str] = field(default_factory=dict)
+    tests: TestsConfig = field(default_factory=TestsConfig)
     report_retention: int = 30
 
 
@@ -206,6 +218,12 @@ def secret_value(repo_path: Path, name: str) -> Optional[str]:
         if sep and key.strip() == name:
             return value.strip().strip("'\"") or None
     return None
+
+
+def resolve_headers(repo_path: Path, headers: Dict[str, str]) -> Dict[str, str]:
+    """api_headers with {NAME} placeholders filled from the environment / .proofpush/secrets.env."""
+    import re
+    return {k: re.sub(r"\{([A-Z0-9_]+)\}", lambda m: secret_value(repo_path, m.group(1)) or "", v) for k, v in headers.items()}
 
 
 def session_file(repo_path: Path, env_name: str) -> Path:
@@ -360,6 +378,14 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
             name: (env.get("url", "") if isinstance(env, dict) else str(env))
             for name, env in raw["environments"].items()
         }
+
+    if isinstance(raw.get("tests"), dict):
+        t = raw["tests"]
+        config.tests = TestsConfig(enabled=bool(t.get("enabled", False)), command=str(t.get("command") or ""),
+                                   timeout=int(t.get("timeout", 600)))
+
+    if isinstance(raw.get("api_headers"), dict):
+        config.api_headers = {str(k): str(v) for k, v in raw["api_headers"].items()}
 
     if isinstance(raw.get("interactions"), dict):
         i = raw["interactions"]
