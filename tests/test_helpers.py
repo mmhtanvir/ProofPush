@@ -5,15 +5,25 @@ Sets up temporary git repositories, bare remotes, mock websites, and pre-push ho
 
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from proofpush.utils import run_command
 
 
 class GitRepoTestCase(unittest.TestCase):
     def setUp(self):
         self.test_dir = Path(tempfile.mkdtemp(prefix="auditor_test_"))
+
+        # Sandbox HOME so baselines (~/.proofpush) and global git config stay out of the real home,
+        # including for hook subprocesses; keep Playwright pointed at the real browser cache.
+        cache = "Library/Caches" if sys.platform == "darwin" else ".cache"
+        browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(Path.home() / cache / "ms-playwright")
+        env_patch = mock.patch.dict(os.environ, {"HOME": str(self.test_dir / "home"), "PLAYWRIGHT_BROWSERS_PATH": browsers})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.remote_dir = self.test_dir / "remote.git"
         self.local_dir = self.test_dir / "repo"
 

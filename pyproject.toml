@@ -19,3 +19,6 @@ dependencies = [
 
 [project.scripts]
 proofpush = "proofpush.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["proofpush*"]
