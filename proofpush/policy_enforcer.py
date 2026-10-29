@@ -9,7 +9,7 @@ from __future__ import annotations
 import webbrowser
 from dataclasses import dataclass
 from typing import List, Optional
-from proofpush.config import PoliciesConfig
+from proofpush.config import PoliciesConfig, SecurityConfig
 from proofpush.classifier import Finding
 from proofpush.unrelated_analyzer import SecurityAuditResult
 from proofpush.utils import detect_unattended, open_user_terminal
@@ -24,9 +24,10 @@ class EnforcementDecision:
 
 
 class PolicyEnforcer:
-    def __init__(self, mode: str, policies_config: PoliciesConfig):
+    def __init__(self, mode: str, policies_config: PoliciesConfig, security_config: Optional[SecurityConfig] = None):
         self.mode = mode.lower()  # advisory, interactive, strict
         self.policies = policies_config
+        self.security = security_config or SecurityConfig()
 
     def evaluate(
         self,
@@ -38,10 +39,12 @@ class PolicyEnforcer:
         """Evaluate audit findings against the enforcement policy."""
         has_critical_regression = any(f.is_critical or f.category == "REGRESSION" for f in findings)
         has_warning = any(f.category in ("REGRESSION", "POSSIBLE_REGRESSION", "REMOVED_FUNCTIONALITY", "BLOCKED", "SUSPICIOUS_PUSH") for f in findings)
-        has_secret = bool(security_result and security_result.secrets_found)
+        # security.fail_on_secret: false turns secrets into a logged warning; fail_on_unrelated: true makes stray files block
+        has_secret = bool(security_result and security_result.secrets_found) and self.security.fail_on_secret
+        has_unrelated = bool(security_result and security_result.unrelated_files) and self.security.fail_on_unrelated
         has_deleted_tests = bool(security_result and security_result.deleted_tests)
 
-        needs_review = has_warning or has_secret or has_deleted_tests
+        needs_review = has_warning or has_secret or has_deleted_tests or has_unrelated
 
         # 1. Advisory Mode: Always allows push
         if self.mode == "advisory":
@@ -66,6 +69,13 @@ class PolicyEnforcer:
                     allowed=False,
                     decision_label="BLOCKED",
                     reason="Hardcoded credentials/secrets detected in outgoing commits.",
+                    exit_code=1,
+                )
+            if has_unrelated:
+                return EnforcementDecision(
+                    allowed=False,
+                    decision_label="BLOCKED",
+                    reason="Files unrelated to the task were changed (security.fail_on_unrelated).",
                     exit_code=1,
                 )
             if has_deleted_tests:

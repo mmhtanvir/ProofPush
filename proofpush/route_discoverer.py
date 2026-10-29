@@ -12,8 +12,15 @@ from pathlib import Path
 from typing import List, Set, Dict, Any, Optional
 
 
+PAGE_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".mdx", ".md"}
+TEST_FILE = re.compile(r"\.(test|spec|stories)\.", re.I)
+SKIP_DIRS = {"node_modules", ".venv", "venv", ".git", ".next", "dist", "build", "out", "coverage", "__pycache__", "tests", "test"}
+
+
 class RouteDiscoverer:
-    def __init__(self, repo_path: Path, base_routes: Optional[List[str]] = None, excluded_routes: Optional[List[str]] = None):
+    def __init__(self, repo_path: Path, base_routes: Optional[List[str]] = None, excluded_routes: Optional[List[str]] = None,
+                 auto_discover: bool = True):
+        self.auto_discover = auto_discover
         self.repo_path = repo_path.resolve()
         self.base_routes = base_routes or ["/"]
         self.excluded_routes = excluded_routes or []
@@ -22,6 +29,8 @@ class RouteDiscoverer:
         """Discover routes declared in framework source files."""
         target_dir = (root_dir or self.repo_path).resolve()
         routes: Set[str] = set(self.base_routes)
+        if not self.auto_discover:
+            return [r for r in sorted(routes) if not self._is_excluded(r)]
 
         # 1. Next.js App Router (app/**/page.jsx, app/**/page.tsx, etc.)
         app_dir = target_dir / "app"
@@ -29,11 +38,15 @@ class RouteDiscoverer:
         for ad in [app_dir, src_app]:
             if ad.is_dir():
                 for p in ad.glob("**/page.*"):
-                    rel = p.relative_to(ad).parent
-                    route_path = "/" + str(rel).replace("\\", "/")
-                    if route_path == "/.":
-                        route_path = "/"
-                    routes.add(route_path)
+                    if p.suffix not in PAGE_EXTENSIONS:
+                        continue
+                    parts = p.relative_to(ad).parent.parts
+                    # Dynamic segments ([id], [...slug]) and private folders (_lib) have no visitable URL
+                    if any(seg.startswith(("[", "_")) for seg in parts):
+                        continue
+                    # Route groups (marketing) and parallel slots @modal don't appear in the URL
+                    url_parts = [seg for seg in parts if not (seg.startswith("(") and seg.endswith(")")) and not seg.startswith("@")]
+                    routes.add("/" + "/".join(url_parts))
 
         # 2. Next.js Pages Router (pages/**/*.jsx, pages/**/*.tsx, etc.)
         pages_dir = target_dir / "pages"
@@ -41,9 +54,10 @@ class RouteDiscoverer:
         for pd in [pages_dir, src_pages]:
             if pd.is_dir():
                 for p in pd.glob("**/*.*"):
-                    if p.name.startswith("_") or p.name.startswith("api"):
-                        continue
                     rel = p.relative_to(pd)
+                    if (p.suffix not in PAGE_EXTENSIONS or rel.parts[0] == "api" or p.name.startswith("_")
+                            or any(seg.startswith("[") for seg in rel.parts) or TEST_FILE.search(p.name)):
+                        continue
                     clean_rel = str(rel.with_suffix("")).replace("\\", "/")
                     if clean_rel == "index":
                         route_path = "/"
@@ -62,12 +76,13 @@ class RouteDiscoverer:
 
         # 4. FastAPI / Flask / Express regex patterns
         route_regex = re.compile(
-            r"""(?:@app\.(?:get|post|route)|@router\.(?:get|post|route)|app\.(?:get|use)|router\.(?:get|use))\s*\(\s*["'](/[^"']*)["']""",
+            # GET routes only: visiting a POST-only route with GET would look like a failure (405)
+            r"""(?:@app\.(?:get|route)|@router\.(?:get|route)|app\.get|router\.get)\s*\(\s*["'](/[^"']*)["']""",
             re.IGNORECASE
         )
         for ext in ["*.py", "*.js", "*.ts"]:
             for f in target_dir.glob(f"**/{ext}"):
-                if "node_modules" in str(f) or ".venv" in str(f) or ".git" in str(f):
+                if any(part in SKIP_DIRS for part in f.relative_to(target_dir).parts):
                     continue
                 try:
                     text = f.read_text(encoding="utf-8", errors="ignore")

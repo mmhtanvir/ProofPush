@@ -51,6 +51,11 @@ def ensure_dependencies():
     """Ensure required browser automation binaries and dependencies are downloaded and verified."""
     console.print("[dim]Verifying required browser dependencies...[/dim]")
     browser_ready = False
+    import importlib.util
+    if importlib.util.find_spec("playwright") is None:
+        console.print("[yellow]Browser checks are not installed (git checks still work). For page checks run: "
+                      "pip install 'proofpush[browser]'[/yellow]")
+        return
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -316,7 +321,7 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
         except Exception as exc:
             findings.append(_blocked("Browser Engine", str(exc).splitlines()[0]))
 
-    decision = PolicyEnforcer("strict", cfg.policies).evaluate(findings=findings, security_result=security_res, is_tty=False)
+    decision = PolicyEnforcer("strict", cfg.policies, cfg.security).evaluate(findings=findings, security_result=security_res, is_tty=False)
     report = AuditReportData(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), repo_path=str(repo_path),
         baseline_sha=base_sha, proposed_sha=candidate_sha, task_title=task_context.title, task_source=task_context.source,
@@ -574,6 +579,7 @@ def _audit_update(
                     repo_path=repo_path,
                     base_routes=cfg.routes.base_routes,
                     excluded_routes=cfg.routes.excluded_routes,
+                    auto_discover=cfg.routes.auto_discover,
                 )
                 base_routes = route_discoverer.discover_source_routes(base_env.worktree_path)
                 prop_routes = route_discoverer.discover_source_routes(prop_env.worktree_path)
@@ -617,33 +623,52 @@ def _audit_update(
                                 ))
                             elif prop_err:
                                 findings.append(_blocked("Login (test account)", prop_err))
+                    viewports = cfg.visual.viewports[:1] if cfg.audit_level == "quick" else cfg.visual.viewports
+                    shots, masks = cfg.visual.enabled, cfg.visual.excluded_selectors
+
+                    def size(v):
+                        return {"width": v.width, "height": v.height} if v else None
+
+                    first = viewports[0] if viewports else None
+                    crawled_b: dict = {}
+                    crawled_p: dict = {}
                     if cfg.routes.crawl:
-                        crawled = await browser_engine.crawl(base_url_p, all_routes, cfg.routes.max_pages, route_discoverer._is_excluded)
-                        crawled += await browser_engine.crawl(base_url_b, all_routes, cfg.routes.max_pages, route_discoverer._is_excluded)
-                        routes = list(dict.fromkeys(v.route for v in crawled))[: cfg.routes.max_pages]
+                        # The crawl's own visits (first viewport, with screenshots) are reused below, not repeated
+                        for url, into in ((base_url_p, crawled_p), (base_url_b, crawled_b)):
+                            for v in await browser_engine.crawl(url, all_routes, cfg.routes.max_pages, route_discoverer._is_excluded,
+                                                                capture_screenshot=shots, viewport=size(first), mask_selectors=masks):
+                                into[v.route] = v
+                        routes = list(dict.fromkeys([*crawled_p, *crawled_b]))[: cfg.routes.max_pages]
+
+                    async def visit(url, route, vp):
+                        return await browser_engine.visit_page(url, route, viewport=size(vp), capture_screenshot=shots, mask_selectors=masks)
+
+                    def compare(route, before, after, vp):
+                        if not (shots and before.screenshot_bytes and after.screenshot_bytes):
+                            return None
+                        result = vis_comparator.compare_images(
+                            baseline_bytes=before.screenshot_bytes, proposed_bytes=after.screenshot_bytes,
+                            route=route, viewport_name=vp.name if vp else "desktop",
+                        )
+                        visual_results.append(result)
+                        return result
+
                     # Audit routes
                     for r in routes:
                         routes_checked_count += 1
-                        base_visit = await browser_engine.visit_page(base_url_b, r, capture_screenshot=cfg.visual.enabled)
-                        prop_visit = await browser_engine.visit_page(base_url_p, r, capture_screenshot=cfg.visual.enabled)
-
-                        vis_res = None
-                        if cfg.visual.enabled and base_visit.screenshot_bytes and prop_visit.screenshot_bytes:
-                            vis_res = vis_comparator.compare_images(
-                                baseline_bytes=base_visit.screenshot_bytes,
-                                proposed_bytes=prop_visit.screenshot_bytes,
-                                route=r,
-                                viewport_name="desktop",
-                            )
-                            visual_results.append(vis_res)
-
-                        f = classifier.classify_route_visit(
-                            route=r,
-                            base_result=base_visit,
-                            prop_result=prop_visit,
-                            visual_result=vis_res,
-                        )
-                        findings.append(f)
+                        base_visit = crawled_b.get(r) or await visit(base_url_b, r, first)
+                        prop_visit = crawled_p.get(r) or await visit(base_url_p, r, first)
+                        findings.append(classifier.classify_route_visit(
+                            route=r, base_result=base_visit, prop_result=prop_visit,
+                            visual_result=compare(r, base_visit, prop_visit, first),
+                        ))
+                        # Other viewports (full audits): layout only, e.g. a nav pushed offscreen on mobile
+                        for vp in viewports[1:]:
+                            before, after = await visit(base_url_b, r, vp), await visit(base_url_p, r, vp)
+                            vis_res = compare(r, before, after, vp)
+                            if vis_res and not vis_res.passed:
+                                findings.append(classifier.classify_route_visit(
+                                    route=f"{r} ({vp.name})", base_result=before, prop_result=after, visual_result=vis_res))
 
                     # Audit workflows
                     for wf in cfg.workflows:
@@ -671,7 +696,7 @@ def _audit_update(
                         expected_behavior="Headless Chromium launches",
                         actual_result=str(exc).splitlines()[0],
                         confidence=1.0,
-                        recommended_action="Run `python3 -m playwright install chromium` (or `proofpush doctor`).",
+                        recommended_action="pip install 'proofpush[browser]' && python3 -m playwright install chromium (or `proofpush doctor`).",
                         is_critical=True,
                     ))
 
@@ -693,7 +718,7 @@ def _audit_update(
     not_tested_cnt = sum(1 for f in findings if f.category in ("NOT_TESTED", "BLOCKED"))
 
     # 10. Policy Evaluation
-    enforcer = PolicyEnforcer(cfg.mode, cfg.policies)
+    enforcer = PolicyEnforcer(cfg.mode, cfg.policies, cfg.security)
     decision = enforcer.evaluate(
         findings=findings,
         security_result=security_res,
@@ -784,7 +809,7 @@ def _execute_baseline_capture(name: str):
     head_sha = interceptor.get_current_head_sha()
 
     cfg = load_config(repo_path)
-    route_discoverer = RouteDiscoverer(repo_path, cfg.routes.base_routes)
+    route_discoverer = RouteDiscoverer(repo_path, cfg.routes.base_routes, cfg.routes.excluded_routes, cfg.routes.auto_discover)
     routes = route_discoverer.discover_source_routes()
 
     bm = BaselineManager(repo_path)

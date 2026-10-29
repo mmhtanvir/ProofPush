@@ -55,7 +55,7 @@ After:  Uncaught TypeError: Cannot read property 'calculateTotal'
 Evidence:
 - Step 2 failed in workflow 'Standard Checkout'
 - Console error captured in DevTools trace
-- HTML Evidence Viewer: .proofpush/reports/report_latest.html
+- HTML Evidence Viewer: .proofpush/reports/latest.html
 ------------------------------------------------------------
 🛑 RECOMMENDATION: PUSH BLOCKED
 Fix the checkout error or use git push --no-verify to override.
@@ -73,6 +73,8 @@ cd ProofPush
 ./install.sh
 ```
 > Installs Python dependencies, downloads Playwright Chromium binaries, and links the `proofpush` CLI.
+>
+> Installing with pip instead? `pip install 'proofpush[browser] @ git+https://github.com/mmhtanvir/ProofPush'` for everything, or without `[browser]` for the git-only checks (deployment gate, reverted fixes, push rules, secrets).
 
 ### 2. Enable in Any Repository
 ```bash
@@ -114,10 +116,10 @@ The pre-push hook only protects machines that have it. To guarantee prod never r
 **Frontend on Vercel** uses the Ignored Build Step: a rejected release shows as **Canceled** in Vercel and production keeps serving the current deployment. In `vercel.json`:
 
 ```json
-{ "ignoreCommand": "pip3 install -q 'proofpush @ git+https://github.com/mmhtanvir/ProofPush' && proofpush gate --vercel" }
+{ "ignoreCommand": "python3 -m pip install -q 'proofpush @ git+https://github.com/mmhtanvir/ProofPush' && proofpush gate --vercel" }
 ```
 
-`--vercel` reads `VERCEL_GIT_PREVIOUS_SHA` (live) and `VERCEL_GIT_COMMIT_SHA` (new), deepens Vercel's shallow clone, gates only production deployments (previews always build), and inverts exit codes the way Vercel expects (0 = cancel).
+This installs only the git checks (no browser), so it adds seconds, not minutes. If the install itself fails, the command exits non-zero and Vercel builds anyway, so a broken install never freezes deploys; the build log shows it. `--vercel` reads `VERCEL_GIT_PREVIOUS_SHA` (live) and `VERCEL_GIT_COMMIT_SHA` (new), deepens Vercel's shallow clone, gates only production deployments (previews always build), and inverts exit codes the way Vercel expects (0 = cancel).
 
 **Backend (e.g. `deploy.sh` on a server)** is a plain exit code: 0 deploy, 1 reject.
 
@@ -139,7 +141,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - run: pip install 'proofpush @ git+https://github.com/mmhtanvir/ProofPush' && python -m playwright install --with-deps chromium
+      - run: pip install 'proofpush[browser] @ git+https://github.com/mmhtanvir/ProofPush' && python -m playwright install --with-deps chromium
       - run: >
           proofpush gate --base origin/main --candidate ${{ github.event.deployment.sha }}
           --base-url https://your-site.com --candidate-url ${{ github.event.deployment_status.target_url }}
@@ -378,7 +380,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 54-scenario test suite |
+| `proofpush test` | Runs the built-in 58-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -394,11 +396,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 54 real-world developer scenarios:
+ProofPush is tested against 58 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 54 tests in 14s (OK)
+# Ran 58 tests in 17s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

@@ -14,7 +14,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
-from playwright.async_api import async_playwright, Response, Request
+
+
+def async_playwright():
+    """Playwright, imported on first use so git-only commands (gate, history checks) work without the browser extra."""
+    try:
+        from playwright.async_api import async_playwright as start
+    except ImportError as exc:
+        raise RuntimeError("Browser checks need the browser extra: pip install 'proofpush[browser]' "
+                           "&& python -m playwright install chromium") from exc
+    return start()
 
 from proofpush.config import AuthConfig, Credentials, WorkflowConfig, WorkflowStep
 from proofpush.utils import redact_secrets, totp
@@ -145,6 +154,7 @@ class BrowserEngine:
         viewport: Optional[Dict[str, int]] = None,
         capture_screenshot: bool = True,
         discover_elements: bool = True,
+        mask_selectors: Optional[List[str]] = None,
     ) -> PageVisitResult:
         """Visit a single route, capture console logs, network errors, interactive elements, and screenshot."""
         full_url = f"{base_url.rstrip('/')}{route}"
@@ -171,7 +181,7 @@ class BrowserEngine:
             page.on("console", on_console)
 
             # Listen to failed network requests
-            def on_request_failed(req: Request):
+            def on_request_failed(req):
                 # Ignore favicons or analytics trackers
                 if "favicon" not in req.url:
                     network_failures.append(
@@ -182,7 +192,7 @@ class BrowserEngine:
                         )
                     )
 
-            def on_response(resp: Response):
+            def on_response(resp):
                 nonlocal status_code
                 if resp.url == page.url or resp.url == full_url:
                     status_code = resp.status
@@ -259,7 +269,8 @@ class BrowserEngine:
                             caret-color: transparent !important;
                         }
                     """)
-                    screenshot = await page.screenshot(full_page=True)
+                    # Dynamic regions (timestamps, ads, ids) are painted over so they never count as visual changes
+                    screenshot = await page.screenshot(full_page=True, mask=[page.locator(s) for s in mask_selectors or []])
 
                 await context.close()
 
@@ -433,7 +444,9 @@ class BrowserEngine:
             out.chmod(0o600)
             await browser.close()
 
-    async def crawl(self, base_url: str, start_routes: List[str], max_pages: int, excluded=lambda route: False) -> List[PageVisitResult]:
+    async def crawl(self, base_url: str, start_routes: List[str], max_pages: int, excluded=lambda route: False,
+                    capture_screenshot: bool = False, viewport: Optional[Dict[str, int]] = None,
+                    mask_selectors: Optional[List[str]] = None) -> List[PageVisitResult]:
         """Visit every page reachable by same-site links (as the logged-in account, if any), up to max_pages. GET only."""
         # Limit: one browser launch per page; reuse a single browser if crawls get slow
         queue, visits, seen = list(dict.fromkeys(start_routes or ["/"])), [], set()
@@ -442,7 +455,8 @@ class BrowserEngine:
             if route in seen or excluded(route) or UNSAFE_LINK.search(route) or NON_PAGE.search(route):
                 continue
             seen.add(route)
-            visit = await self.visit_page(base_url, route, capture_screenshot=False, discover_elements=False)
+            visit = await self.visit_page(base_url, route, viewport=viewport, capture_screenshot=capture_screenshot,
+                                          discover_elements=False, mask_selectors=mask_selectors)
             visits.append(visit)
             queue += [link for link in visit.discovered_links if link not in seen]
         return visits
@@ -473,7 +487,7 @@ class BrowserEngine:
                 if msg.type in ("error", "warning"):
                     console_errors.append(f"[{msg.type.upper()}] {msg.text}")
 
-            def on_request_failed(req: Request):
+            def on_request_failed(req):
                 network_failures.append(
                     NetworkFailure(url=req.url, method=req.method, error_text=req.failure or "Failed")
                 )

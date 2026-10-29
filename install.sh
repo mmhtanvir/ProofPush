@@ -16,7 +16,7 @@ fi
 
 echo "1. Installing Python package and dependencies..."
 python3 -m pip install --upgrade pip >/dev/null 2>&1 || true
-python3 -m pip install -e .
+python3 -m pip install -e ".[browser]"
 
 echo "2. Installing Playwright browser dependencies (Chromium)..."
 python3 -m playwright install chromium

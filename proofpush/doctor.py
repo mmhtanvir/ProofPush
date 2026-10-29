@@ -79,6 +79,8 @@ class Doctor:
                 b.close()
             browser_passed = True
             browser_detail = "Playwright Chromium headless browser verified and ready"
+        except ImportError:
+            browser_detail = "Not installed: git checks work; for page checks run pip install 'proofpush[browser]'"
         except Exception as exc:
             browser_detail = f"Chromium launch check failed: {exc}. Run `playwright install chromium`"
 

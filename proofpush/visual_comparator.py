@@ -10,7 +10,6 @@ import io
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List
-from PIL import Image, ImageChops, ImageDraw
 
 
 @dataclass
@@ -52,6 +51,8 @@ class VisualComparator:
     ) -> VisualComparisonResult:
         """Compare two screenshot byte buffers, calculate difference ratio, bounding boxes, and save diff overlay."""
         eff_threshold = threshold if threshold is not None else self.diff_threshold
+
+        from PIL import Image, ImageChops, ImageDraw  # browser extra; only needed when comparing screenshots
 
         img_b = Image.open(io.BytesIO(baseline_bytes)).convert("RGB")
         img_p = Image.open(io.BytesIO(proposed_bytes)).convert("RGB")
