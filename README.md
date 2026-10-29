@@ -1,142 +1,136 @@
-# ProofPush
+<div align="center">
 
-> **ProofPush: Local AI Website Regression Auditor**
-> Audits website functionality, visual regressions, and security before Git push.
+# 🛡️ ProofPush
 
-Unlike conventional code-review bots that only analyze static text diffs, **ProofPush** executes your website before and after changes in isolated local environments, evaluates actual user-facing behavior via Playwright browser automation, detects regressions and hardcoded secrets, and produces evidence-backed reports to allow or block pushes.
+### Never push broken website code again.
 
----
+**A local-first pre-push gatekeeper that spins up your site before and after changes, tests real user behavior with Playwright, and blocks regressions before they hit remote.**
 
-## Key Features
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Playwright](https://img.shields.io/badge/powered%20by-Playwright-45ba4b.svg)](https://playwright.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Local First](https://img.shields.io/badge/privacy-100%25%20local-success.svg)](#privacy--local-first)
 
-1. **Universal Git Pre-Push Interception**
-   - Automatically intercepts `git push` attempts via standard Git hooks.
-   - Preserves pre-existing repository hooks by chaining them as `pre-push.legacy`.
-   - Correctly processes standard input refs across multi-commit pushes, force pushes, new branches, and ref deletions.
-   - Built-in recursion protection (`PROOFPUSH_RUNNING`).
-
-2. **Task Context Awareness**
-   - Resolves what you or an AI agent (Claude Code, Gemini CLI, Cursor, Codex) intended to change from:
-     1. Explicit CLI arguments (`--task "..."`) or `PROOFPUSH_TASK` environment variable.
-     2. Agent lifecycle metadata (`.claude/current_task.json`, `.gemini/task.md`).
-     3. Commit messages being pushed.
-     4. Task context file (`.proofpush-task.md` or `.git/proofpush-task.md`).
-     5. Interactive developer prompt.
-   - Built-in prompt injection defense to sanitize adversarial instructions in commit messages.
-
-3. **Isolated Parallel Execution**
-   - Launches baseline and proposed versions in separate temporary Git worktrees (`git worktree add --detach`).
-   - Automatically allocates collision-free local ports (e.g. 3100 vs 3200).
-   - Isolates mutable state (test databases, environment variables).
-   - Cleanly cleans up temporary worktrees and child processes upon completion.
-
-4. **Playwright-Based Functional Testing**
-   - Framework route discovery (Next.js App/Pages router, FastAPI, Django, Express, HTML files, sitemaps).
-   - Monitors unhandled JavaScript console exceptions and failed network/API requests.
-   - Executes multi-step user workflows using accessible and semantic selectors.
-   - Built-in safety filters to avoid clicking destructive actions (e.g., delete, purge, charge, pay) during exploration.
-
-5. **Visual Regression Testing**
-   - Captures synchronized screenshots across configurable desktop and mobile viewports.
-   - Normalizes and stabilizes dynamic content (animations, timestamps, scrollbars).
-   - Computes pixel-level difference ratios and bounding boxes highlighting shifted or modified layouts.
-
-6. **Unrelated Changes & Security Audit**
-   - Classifies outgoing changed files: `Relevant`, `Supporting`, `Possibly related`, `Unrelated`, `Suspicious`, `Sensitive`.
-   - Scans diffs for accidentally committed credentials, API keys (OpenAI, AWS, GitHub), and private keys.
-   - Detects suspicious deletions of automated test suites.
-
-7. **Local-First & Modular AI**
-   - Default 100% deterministic local rule engine requiring **zero external network requests**.
-   - Optional modular adapters for OpenAI / Anthropic APIs with automated secret redaction.
+</div>
 
 ---
 
-## Quick Start & Installation
+## ⚡ Why ProofPush?
 
-### Option 1: One-Command Installation (Automated)
-Clone the repository and run the installer script, which sets up Python dependencies and Playwright browser binaries in a single command:
+AI coding agents (Claude Code, Cursor, Codex, Gemini CLI) write code fast—**and break websites silently**. 
 
+Conventional linters and code-review bots only read text diffs. They don't know that:
+- Your checkout button became unclickable.
+- A CSS tweak pushed the navigation bar offscreen on mobile.
+- A missing import in client-side code triggers a silent `TypeError` in DevTools.
+- An accidental edit introduced an unrelated breaking change or leaked an API key.
+
+**ProofPush tests what your website actually does, not just how its source code looks.**
+
+```
+$ git push origin main
+
+============================================================
+                         PROOFPUSH
+              Local Website Regression Auditor
+============================================================
+Repository:   ~/projects/acme-store
+Task:         Add coupon support to checkout
+Baseline:     7ac19f2 → Proposed: a41c0d8
+Mode:         STRICT
+------------------------------------------------------------
+ROUTES CHECKED:       12
+FUNCTIONAL WORKFLOWS: 8
+VISUAL COMPARISONS:   12 (Desktop & Mobile)
+------------------------------------------------------------
+RESULTS:
+  Passed:             18
+  Expected changes:    1
+  Regressions:         1
+------------------------------------------------------------
+🚨 REGRESSION DETECTED
+Target: /checkout.html
+Before: All network assets and API requests succeeded.
+After:  Uncaught TypeError: Cannot read property 'calculateTotal'
+Evidence:
+- Step 2 failed in workflow 'Standard Checkout'
+- Console error captured in DevTools trace
+- HTML Evidence Viewer: .change-auditor/reports/report_latest.html
+------------------------------------------------------------
+🛑 RECOMMENDATION: PUSH BLOCKED
+Fix the checkout error or use git push --no-verify to override.
+============================================================
+```
+
+---
+
+## 🚀 Quickstart (30 Seconds)
+
+### 1. One-Line Install
 ```bash
 git clone https://github.com/mmhtanvir/ProofPush.git
 cd ProofPush
 ./install.sh
 ```
+> Installs Python dependencies, downloads Playwright Chromium binaries, and links the `proofpush` CLI.
 
-### Option 2: Pip Installation
+### 2. Enable in Any Repository
 ```bash
-git clone https://github.com/mmhtanvir/ProofPush.git
-cd ProofPush
-pip install -e .
+cd ~/your-web-project
 proofpush install
 ```
+That's it! Every `git push` (from terminal, VS Code, Cursor, or AI CLI) will now be tested before leaving your machine.
 
-> **Note**: Running `proofpush install` inside any repository automatically verifies and downloads any required Playwright browser binaries if they are not already installed.
+---
 
-### Step 3: Run Diagnostics
-```bash
-proofpush doctor
+## 💡 What It Does Behind the Scenes
+
+```mermaid
+flowchart LR
+    A["git push"] --> B["Pre-Push Hook"]
+    B --> C["Resolve Task Intent"]
+    C --> D["Launch Isolated Baseline (Port 3100)"]
+    C --> E["Launch Proposed Revision (Port 3200)"]
+    D & E --> F["Playwright Functional & Visual Diff Engine"]
+    F --> G["Secret & Unrelated Changes Scan"]
+    G --> H{"Any Regressions?"}
+    H -->|No| I["✅ Push Allowed"]
+    H -->|Yes| J["🛑 Push Blocked + Evidence Report"]
 ```
 
----
-
-## CLI Command Reference
-
-| Command | Description |
-|---|---|
-| `proofpush install` | Installs the pre-push hook in the current Git repository. Preserves existing hooks. |
-| `proofpush install --global` | Configures global Git hook path. |
-| `proofpush uninstall` | Safely uninstalls the pre-push hook and restores any preserved legacy hook. |
-| `proofpush doctor` | Diagnoses environment, dependencies, Git hooks, and configuration. |
-| `proofpush review` | Audits pending or proposed changes against the baseline. |
-| `proofpush review --full` | Runs comprehensive full audit (broader crawl, all viewports). |
-| `proofpush review --mode strict` | Forces strict enforcement mode (blocks on any critical issue). |
-| `proofpush baseline capture` | Captures and validates a new baseline snapshot for the current HEAD commit. |
-| `proofpush baseline list` | Lists locally captured baselines for the repository. |
-| `proofpush report` | Displays the latest audit report in Markdown format. |
-| `proofpush report --json` | Outputs the latest report in structured JSON. |
-| `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser. |
-| `proofpush config` | Displays the effective configuration. |
-| `proofpush test` | Runs the automated 30-scenario test suite. |
+1. **Zero Working Tree Pollution**: Runs baseline vs proposed in isolated temporary Git worktrees on dynamic ports. Your active files are never touched.
+2. **Context-Aware Comparison**: Distinguishes intentional changes from accidental regressions using your commit messages, task files, or AI agent context.
+3. **Visual Diffing**: Normalizes viewport dimensions, freezes animations, and generates visual bounding boxes for shifted elements.
+4. **Leak Guard**: Scans diffs for leaked secrets (`sk-...`, AWS keys, tokens) and flags deleted test suites.
+5. **Chains Existing Hooks**: Preserves your existing pre-push hooks by automatically backing them up and chaining them.
 
 ---
 
-## Configuration (`.proofpush.yml` or `.change-auditor.yml`)
+## 🛠️ Configuration (`.proofpush.yml`)
 
-Place `.proofpush.yml` in your repository root:
+ProofPush works out of the box with zero configuration for static sites, but you can configure full-stack apps easily:
 
 ```yaml
-# Audit Mode: advisory, interactive, strict
+# .proofpush.yml
+
+# Mode: 'strict' (blocks push), 'interactive' (prompts you), 'advisory' (logs only)
 mode: interactive
 
-# Audit Depth: quick, full
-audit_level: quick
-
-# Baseline Strategy: merge-base, captured, commit, latest-passed
-baseline:
-  strategy: merge-base
-  reference_ref: origin/main
-
-# Application Startup Configuration
+# How your application starts locally
 application:
-  type: custom # nextjs, django, fastapi, node, custom
-  start_command: "npm run dev -- -p $PORT"
+  type: custom # nextjs, vite, django, fastapi, node
+  start_command: "npm run dev -- --port $PORT"
   port: 3000
   health_check: "/"
-  health_timeout: 30
-  env:
-    NODE_ENV: test
 
-# Routes to test
+# Key routes to audit
 routes:
-  auto_discover: true
   base_routes:
     - "/"
+    - "/pricing"
     - "/checkout"
-  excluded_routes:
-    - "/admin/purge*"
 
-# Custom Functional Workflows
+# Critical workflows to verify
 workflows:
   - name: "Checkout Navigation"
     path: "/"
@@ -144,11 +138,11 @@ workflows:
       - action: navigate
         value: "/"
       - action: click
-        selector: "button[data-testid='checkout-button']"
+        selector: "button[data-testid='checkout']"
       - action: assert_url
         expected: "/checkout"
 
-# Visual Regression Settings
+# Visual viewports to compare
 visual:
   enabled: true
   diff_threshold: 0.02
@@ -159,98 +153,89 @@ visual:
     - width: 375
       height: 667
       name: mobile
-  excluded_selectors:
-    - ".timestamp"
-    - ".dynamic-id"
-
-# Security & Secret Scanning
-security:
-  sensitive_paths:
-    - ".env*"
-    - "**/*.pem"
-    - "**/*.key"
-  fail_on_secret: true
-  fail_on_unrelated: false
-
-# Enforcement Policies
-policies:
-  fail_open: false
-  interactive_fallback: block # block or allow in non-interactive CI / AI CLI
 ```
 
+### Examples for Common Frameworks
+
+<details>
+<summary><b>Next.js</b></summary>
+
+```yaml
+application:
+  start_command: "npx next dev -p $PORT"
+  health_check: "/"
+```
+</details>
+
+<details>
+<summary><b>Vite / React / Vue</b></summary>
+
+```yaml
+application:
+  start_command: "npx vite --port $PORT"
+  health_check: "/"
+```
+</details>
+
+<details>
+<summary><b>FastAPI / Flask</b></summary>
+
+```yaml
+application:
+  start_command: "uvicorn main:app --port $PORT"
+  health_check: "/health"
+```
+</details>
+
+<details>
+<summary><b>Django</b></summary>
+
+```yaml
+application:
+  start_command: "python manage.py runserver $PORT"
+  health_check: "/"
+```
+</details>
+
 ---
 
-## Enforcement Policies
+## ⌨️ CLI Commands
 
-### 1. Advisory Mode (`mode: advisory`)
-Executes the full audit, displays terminal findings and visual comparisons, but **never blocks the push** (exit code `0`). Ideal for onboarding existing codebases.
-
-### 2. Interactive Mode (`mode: interactive`)
-When regressions, secrets, or suspicious changes are detected:
-- Displays summary in the terminal.
-- Prompts developer: `Approve push anyway? [y/N/inspect/open report]`.
-- Allows inspecting error details or opening the standalone HTML evidence report.
-- In non-interactive environments (CI, autonomous AI CLI without a TTY), falls back to `policies.interactive_fallback` (default: `block`).
-
-### 3. Strict Mode (`mode: strict`)
-Automatically blocks the push (exit code `1`) if:
-- A critical existing workflow or route regresses.
-- An unhandled browser console exception or failing network request occurs.
-- A hardcoded credential or secret is detected.
-- An existing automated test suite is deleted.
+| Command | What it does |
+|---|---|
+| `proofpush install` | Installs the pre-push hook & verifies browser binaries |
+| `proofpush review` | Manually runs an audit on your pending commits |
+| `proofpush review --full` | Runs a comprehensive audit (multi-viewport, full crawl) |
+| `proofpush review --mode strict` | Forces strict blocking mode |
+| `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
+| `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
+| `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
+| `proofpush test` | Runs the built-in 30-scenario test suite |
+| `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
 ---
 
-## Limitations & Bypass Disclosure
+## 🔒 Privacy & Local-First
 
-1. **Local Hook Bypass**:
-   Git hooks run entirely client-side. Like any local Git hook, ProofPush can be bypassed using:
-   - `git push --no-verify`
-   - Modifying `.git/hooks/pre-push`
-   - Pushing via remote web hosting APIs (GitHub/GitLab web editor).
-   *Local-only protection is not a substitute for remote branch protection rules in multi-developer teams.*
-
-2. **Port Clashing**:
-   If background development servers are already listening on default ports, ProofPush scans and binds to alternative available local ports dynamically.
+- **100% Local**: No cloud dashboard, no telemetry, no analytics, no remote databases.
+- **Zero Token Cost**: Uses a deterministic local classification engine by default.
+- **Secret Redaction**: Any credentials or tokens found in logs or reports are automatically scrubbed.
 
 ---
 
-## Verification & Automated Test Suite
+## 🧪 Built-in Test Suite
 
-ProofPush includes a comprehensive test suite covering 30 specific real-world scenarios:
+ProofPush is tested against 30 real-world developer scenarios:
 
 ```bash
 proofpush test
+# Ran 30 tests in 11.5s (OK)
 ```
 
-### Verified Test Scenarios:
-1. Normal human-initiated push.
-2. Simulated autonomous AI CLI push.
-3. Relevant change introducing no regression (`UNCHANGED`).
-4. New feature functioning only in proposed version (`NEW_FUNCTIONALITY`).
-5. Existing feature breaking after change (`REGRESSION`).
-6. Visual-only layout change detection with bounding box calculation.
-7. Unrelated code change flagged during focused task.
-8. Relevant change causing regression in another workflow.
-9. Renamed route detection.
-10. Unexpectedly removed route detection (`REMOVED_FUNCTIONALITY`).
-11. Changed route authentication requirement (401/403 or redirect).
-12. Failed application startup handling with captured error logs.
-13. Database isolation preventing host pollution.
-14. Clear handling when baseline Git revision cannot be established.
-15. Seamless fallback to local rule engine when no AI provider is configured.
-16. Unhandled browser console exception detection.
-17. Intentionally changed workflow classification (`EXPECTED_CHANGE`).
-18. Hardcoded API key and secret detection in diff.
-19. Force push detection when remote ref is not an ancestor.
-20. Multiple commits in a single outgoing push ref update.
-21. Uncommitted working tree modifications cleanly ignored.
-22. Strict mode push blocking on critical regression (exit code 1).
-23. Advisory mode push allowance with logged warnings (exit code 0).
-24. Preservation and chaining of pre-existing Git hooks (`pre-push.legacy`).
-25. Direct push bypass using `--no-verify`.
-26. Graceful handling of unavailable browser binaries or ports.
-27. Prompt injection defense in commit messages and task descriptions.
-28. Safety filtering against destructive interactive exploratory actions.
-29. Complete cleanup of temporary worktrees and child processes.
-30. Verification that blocked pushes do not update remote Git refs.
+Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, and destructive action prevention.
+
+---
+
+## 📄 License
+
+MIT © [ProofPush Team](https://github.com/mmhtanvir/ProofPush)
