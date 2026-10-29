@@ -269,7 +269,7 @@ mode: interactive
 
 # How your application starts locally
 application:
-  type: custom # nextjs, vite, django, fastapi, node
+  type: custom # a label for reports; start_command is what actually runs the app
   start_command: "npm run dev -- --port $PORT"
   port: 3000
   health_check: "/"
@@ -371,7 +371,7 @@ application:
 |---|---|
 | `proofpush install` | Installs the pre-push hook & verifies browser binaries |
 | `proofpush review` | Manually runs an audit on your pending commits |
-| `proofpush review --full` | Runs a comprehensive audit (multi-viewport, full crawl) |
+| `proofpush review --full` | Runs a comprehensive audit (every viewport, every discovered route; add `routes.crawl` to follow links) |
 | `proofpush review --mode strict` | Forces strict blocking mode |
 | `proofpush gate --base <live> --candidate <new>` | Deployment gate: exit 1 rejects a release that brings back fixed bugs (`--vercel` for Vercel's Ignored Build Step) |
 | `proofpush check --env prod` | Logs in with the prod test account and checks every reachable page of the live site (read-only) |
@@ -388,7 +388,7 @@ application:
 
 ## 🔒 Privacy & Local-First
 
-- **100% Local**: No cloud dashboard, no telemetry, no analytics, no remote databases.
+- **100% Local by default**: No cloud dashboard, no telemetry, no analytics, no remote databases. Nothing leaves your machine unless you opt in to a team webhook (`notify.webhook_env`) or the OpenAI summary (`ai.provider: openai`), and both receive redacted content only.
 - **Zero Token Cost**: Uses a deterministic local classification engine by default.
 - **Secret Redaction**: Any credentials or tokens found in logs or reports are automatically scrubbed.
 
