@@ -242,7 +242,11 @@ class EnvironmentManager:
         proc_env["PORT"] = str(port)
         proc_env["AUDITOR_PORT"] = str(port)
         proc_env["BASE_URL"] = base_url
-        proc_env["DATABASE_URL"] = database_url or f"sqlite:///{db_path}"
+        if self.app_config.database != "none":
+            # Isolation: each version gets its own database (disposable PostgreSQL, or a SQLite file by default)
+            proc_env["DATABASE_URL"] = database_url or f"sqlite:///{db_path}"
+        # database: none keeps the app's own DATABASE_URL (.env): reads only; API writes are still refused
+        # unless that database is local (see api_testing.Policy)
         proc_env["PROOFPUSH_RUNNING"] = "1"
         proc_env.setdefault("PYTHONUNBUFFERED", "1")  # Python apps' output reaches the log at once (startup diagnostics)
         if backend_port:

@@ -72,6 +72,8 @@ class ApplicationConfig:
     env: Dict[str, str] = field(default_factory=dict)
     backend: Optional[ServiceConfig] = None
     # "postgres": a disposable PostgreSQL container per version (needs Docker/Podman); its URL becomes DATABASE_URL
+    # "none": don't set DATABASE_URL, the app uses its own setting (e.g. an async driver URL from .env)
+    # default "": DATABASE_URL=sqlite:///<file> per version (isolates apps that read DATABASE_URL)
     database: str = ""
     database_image: str = "postgres:16-alpine"
 
