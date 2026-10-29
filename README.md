@@ -290,6 +290,19 @@ Endpoints are discovered from **both** versions, so one the change deletes is st
 | Server errors | `server error 500`, `candidate did not respond` |
 | Baseline only | `$.total changed 5.0 -> 4.0`: a **potential** regression to confirm, never a confirmed one |
 
+When something changed and nothing says which value is right (no assertion, contract or test), ProofPush **asks you** at push time:
+
+```
+[proofpush] These changed, and ProofPush can't tell whether that's intended:
+  API GET /api/cart/total [cart total]
+    $.total changed 5.0 -> 4.0
+    Is this change on purpose? [y]es, on purpose / [n]o, it's a mistake:
+```
+
+On purpose: shown as an intended change, push continues. Mistake: push blocked. AI agents can't be asked, so their blocked-push summary tells them to ask you exactly this. To stop being asked about a value, pin it with an assertion.
+
+**No OpenAPI description?** ProofPush warns you, naming the write endpoints (POST/PUT/PATCH) it can't build requests for: they're only tested through `api_tests.cases` you write. GET routes are still tested. `proofpush doctor` shows the same.
+
 Timestamps and UUIDs are treated as dynamic; prices, statuses and every other value are compared unless you list the field in `normalize_fields`. Failures that also happen on the old version are reported as existing, not blamed on the change. A version that doesn't respond at all is an environment problem, not a regression.
 
 ```yaml
@@ -476,6 +489,7 @@ ProofPush runs inside `git push`, so it works with any AI CLI that pushes: Claud
   | `CI` | CI runners |
   | `PROOFPUSH_NONINTERACTIVE=1` | Anything else: set it in your agent's environment |
 
+- **Commit-message tip.** A vague message ("update", "wip", "changes") gets a tip at the end of the report: if it fixes a bug, start it with `fix:` so ProofPush can warn you if that bug ever comes back (fix detection reads commit messages). It never blocks.
 - **Tells the agent why.** A blocked push ends with a short plain-text list, the part of the output agents read:
 
   ```
@@ -630,7 +644,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 87-scenario test suite |
+| `proofpush test` | Runs the built-in 90-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -646,7 +660,7 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 87 real-world developer scenarios:
+ProofPush is tested against 90 real-world developer scenarios:
 
 ```bash
 proofpush test

@@ -123,3 +123,38 @@ class FixHistoryGuard:
                 is_critical=reverted,
             ))
         return findings
+
+
+VAGUE_MESSAGE = re.compile(r"^(update[sd]?|changes?|changed|edits?|edited|wip|minor|misc|stuff|tmp|temp|tests?|testing|"
+                           r"commit|save[sd]?|asdf|done|final|tweaks?|cleanup|clean up|more|small changes?|[.\-_]+)[\s.!]*$", re.I)
+
+
+def vague_commits(messages: List[str]) -> List[str]:
+    """Commit subjects too vague to tell whether they fix a bug (so the fix-history guard can't protect them)."""
+    vague = []
+    for message in messages:
+        subject = message.strip().split("\n")[0].strip()
+        if not subject or any(re.search(p, subject, re.I) for p in FIX_PATTERNS):
+            continue
+        if VAGUE_MESSAGE.match(subject) or len(subject.split()) <= 2:
+            vague.append(subject)
+    return vague
+
+
+def commit_message_advice(messages: List[str]) -> List[Finding]:
+    vague = vague_commits(messages)
+    if not vague:
+        return []
+    names = ", ".join(f"'{v[:40]}'" for v in vague[:3]) + (f" (+{len(vague) - 3} more)" if len(vague) > 3 else "")
+    return [Finding(
+        category="NOTICE",
+        target="Commit message",
+        before_behavior="",
+        after_behavior=f"{names} doesn't say what changed",
+        expected_behavior="Bug-fix commits say they are fixes",
+        actual_result="ProofPush can't tell whether this commit fixes a bug",
+        confidence=1.0,
+        recommended_action=("If it fixes a bug, start the message with 'fix:' (e.g. 'fix: cart total ignores quantity') "
+                            "so ProofPush can warn you if that bug ever comes back."),
+    )]
+

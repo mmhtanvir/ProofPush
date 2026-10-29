@@ -131,6 +131,40 @@ class PolicyEnforcer:
                 tty.write(text + "\n")
                 tty.flush()
 
+            # Changes ProofPush can't judge (no assertion/contract says what's right): the developer decides
+            unclear = [f for f in findings if f.category == "POSSIBLE_REGRESSION"]
+            if unclear:
+                say("\n[proofpush] These changed, and ProofPush can't tell whether that's intended:")
+                for f in unclear:
+                    say(f"\n  {f.target}\n    {f.after_behavior}")
+                    while True:
+                        tty.write("    Is this change on purpose? [y]es, on purpose / [n]o, it's a mistake: ")
+                        tty.flush()
+                        answer = (tty.readline() or "n").strip().lower()
+                        if answer in ("y", "yes", "n", "no", ""):
+                            break
+                        say("    Please answer y or n.")
+                    if answer in ("y", "yes"):
+                        f.category = "EXPECTED_CHANGE"
+                        f.recommended_action = "Confirmed as intended by the developer."
+                    else:
+                        return EnforcementDecision(
+                            allowed=False,
+                            decision_label="BLOCKED",
+                            reason=f"You marked this change as a mistake: {f.target}: {f.after_behavior}",
+                            exit_code=1,
+                        )
+                still_needs_review = (has_secret or has_deleted_tests or has_unrelated or any(
+                    f.is_critical or f.category in ("REGRESSION", "REMOVED_FUNCTIONALITY", "BLOCKED", "SUSPICIOUS_PUSH")
+                    for f in findings))
+                if not still_needs_review:
+                    return EnforcementDecision(
+                        allowed=True,
+                        decision_label="ALLOWED",
+                        reason="All changes confirmed as intended by the developer.",
+                        exit_code=0,
+                    )
+
             say("\n[proofpush] Attention: Issues detected during pre-push audit.")
             if has_secret:
                 say("  - [CRITICAL] Secret or credential detected in commits!")

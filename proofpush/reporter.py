@@ -94,7 +94,8 @@ class ReportGenerator:
         print(f"  Not tested:         {data.not_tested_count}")
 
         # Print everything that needs attention (regressions, warnings, blocked checks, suspicious pushes, notices)
-        attention = [f for f in data.findings if f.category not in ("UNCHANGED", "EXPECTED_CHANGE", "NEW_FUNCTIONALITY")]
+        attention = [f for f in data.findings if f.category not in ("UNCHANGED", "EXPECTED_CHANGE", "NEW_FUNCTIONALITY")
+                     and f.target != "Commit message"]  # shown as a TIP at the end
         if attention:
             for r in attention:
                 print("\n" + "-" * 60)
@@ -132,6 +133,12 @@ class ReportGenerator:
                 print("VISUAL DIFFERENCE")
                 print(f"Page: {v.route} ({v.viewport_name})")
                 print(f"Details: {v.summary}")
+
+        for f in data.findings:
+            if f.target == "Commit message":
+                print("\n" + "-" * 60)
+                print(f"TIP: commit {f.after_behavior}.")
+                print(f.recommended_action)
 
         print("\n" + "=" * 60)
         decision_str = {

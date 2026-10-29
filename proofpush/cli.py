@@ -25,7 +25,7 @@ from proofpush.task_resolver import TaskResolver
 from proofpush.baseline_manager import BaselineManager, BaselineMetadata
 from proofpush.environment_manager import EnvironmentManager
 from proofpush.route_discoverer import RouteDiscoverer
-from proofpush.fix_history import FixHistoryGuard
+from proofpush.fix_history import FixHistoryGuard, commit_message_advice
 from proofpush import api_testing, notifier, push_rules, test_suite
 from proofpush.browser_engine import BrowserEngine
 from proofpush.visual_comparator import VisualComparator
@@ -269,6 +269,22 @@ def _run_api_tests(cfg: AuditorConfig, roots: List[Path], env_name: str, env_typ
     outcomes = api_testing.run_suite(cases, policy, limits, cand_url, cand_headers, base_url, base_headers,
                                      opts.normalize_fields, identities)
     findings = api_testing.to_findings(outcomes, len(endpoints), f"{env_name} ({env_type})")
+    if "openapi" in opts.sources and not origin:
+        explicit = {(c.method, c.path) for c in api_testing.cases_from_config(opts.cases)}
+        untested = [e for e in endpoints if e.method not in api_testing.SAFE_METHODS and not e.body_schema
+                    and (e.method, e.path) not in explicit]
+        warning = ("No OpenAPI description found, so ProofPush can't build request bodies: "
+                   + (f"{len(untested)} write endpoint(s) ({', '.join(e.key for e in untested[:3])}"
+                      + (", ..." if len(untested) > 3 else "") + ") won't be tested" if untested
+                      else "POST/PUT/PATCH endpoints won't be tested")
+                   + " unless you add api_tests.cases for them. GET routes are still tested.")
+        console.print(f"[proofpush] WARNING: {warning}", markup=False)
+        findings.append(Finding(
+            category="NOTICE", target="Backend API description", before_behavior="", after_behavior=warning,
+            expected_behavior="An OpenAPI description of the backend", actual_result="none found", confidence=1.0,
+            recommended_action=("FastAPI serves one at /openapi.json automatically; Django REST Framework: add "
+                                "drf-spectacular; Express: swagger-jsdoc; or set api_tests.openapi to your spec file."),
+        ))
     if perm_problems:
         findings.append(_blocked("Permission matrix", "; ".join(perm_problems[:5])))
     return findings
@@ -536,6 +552,8 @@ def why_blocked(headline: str, reason: str, findings: List[Finding], security_re
             lines.append(f"       what: {redact_secrets(' / '.join(str(what).split(chr(10))[:3]))[:300]}")
             if repro:
                 lines.append(f"       reproduce: {redact_secrets(str(repro))[:200]}")
+            if kind == "POSSIBLE REGRESSION":
+                lines.append("       ask the user: is this change on purpose, or a mistake?")
         if len(items[layer]) > per_layer:
             lines.append(f"    (+{len(items[layer]) - per_layer} more {layer.lower()} item(s) in the report)")
     if report_paths:
@@ -741,6 +759,7 @@ def _audit_update(
     env_mgr = EnvironmentManager(repo_path, cfg.application)
     # Past fixes this push undoes (git history only, works for any project)
     findings: List[Finding] = FixHistoryGuard(repo_path).analyze(baseline_sha, proposed_sha)
+    findings += commit_message_advice(commit_messages)
     # Suspicious-push rules (Pushguard catalog): force pushes, install hooks, CI tampering, hidden code
     if cfg.push_rules.enabled:
         push_ctx = push_rules.build_context(
@@ -1025,8 +1044,8 @@ def _audit_update(
         console.print(
             f"[proofpush] Push blocked for {detect_unattended()}.\n"
             "AI agents: do not bypass with --no-verify or by changing ProofPush settings. Fix the items listed above, "
-            "or show them to the user and ask how to proceed. The user can approve one push with "
-            "`PROOFPUSH_MODE=advisory git push`.",
+            "or show them to the user and ask how to proceed; for each POSSIBLE REGRESSION ask whether the change is on "
+            "purpose or a mistake. The user can approve one push with `PROOFPUSH_MODE=advisory git push`.",
             markup=False,
         )
 

@@ -761,8 +761,10 @@ def classify(case: ApiCase, base: Optional[ApiResult], cand: ApiResult, normaliz
         diffs.append(f"slower: {base.ms} ms -> {cand.ms} ms")
     if not diffs:
         return CaseOutcome(case, base, cand, "passed", [], source)
-    # Differences that pass every explicit/contract check are only suspicious, never confirmed
-    category = "expected_difference" if case.kind == "explicit" else "potential_regression"
+    # Differences that pass every check are only suspicious, never confirmed. A case's own expectations passing
+    # makes the difference intended; a case with no expectations proves nothing either way.
+    pinned = case.kind == "explicit" and (case.expect_status or case.expect_body or case.expect_fields or case.assertions)
+    category = "expected_difference" if pinned else "potential_regression"
     return CaseOutcome(case, base, cand, category, diffs, "baseline behaviour")
 
 

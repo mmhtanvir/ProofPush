@@ -135,7 +135,18 @@ class Doctor:
                                "detail": f"{'enabled' if cfg.tests.enabled else 'found, off'}: {detected}"
                                          + ("" if cfg.tests.enabled else "  (turn on: tests: {enabled: true})")})
 
-        # 11. Baseline store check
+        # 11. Backend API description (needed to test write endpoints)
+        if cfg.api_tests.mode != "off" and "openapi" in cfg.api_tests.sources:
+            from proofpush.api_testing import load_openapi
+            spec, where = load_openapi(self.repo_path, cfg.api_tests.openapi if not cfg.api_tests.openapi.startswith(("/", "http")) else "")
+            served = cfg.api_tests.openapi.startswith(("/", "http"))
+            checks.append({"name": "Backend API Description", "passed": bool(spec) or served,
+                           "detail": f"OpenAPI: {where}" if spec else (f"read from the running app at {cfg.api_tests.openapi}" if served else
+                                     "No OpenAPI file in the repo. If the app serves one while running (FastAPI: /openapi.json) "
+                                     "audits read it; if not, backend write endpoints (POST/PUT/PATCH) won't be tested unless "
+                                     "you add api_tests.cases (DRF: add drf-spectacular).")})
+
+        # 12. Baseline store check
         if in_repo:
             bm = BaselineManager(self.repo_path)
             baselines = bm.list_baselines()
