@@ -103,6 +103,13 @@ class PoliciesConfig:
 
 
 @dataclass
+class PushRulesConfig:
+    enabled: bool = True
+    enable: List[str] = field(default_factory=list)  # turn on rules that are off by default
+    disable: List[str] = field(default_factory=list)
+
+
+@dataclass
 class AuditorConfig:
     mode: str = "interactive"  # advisory, interactive, strict
     audit_level: str = "quick"  # quick, full
@@ -114,6 +121,7 @@ class AuditorConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     policies: PoliciesConfig = field(default_factory=PoliciesConfig)
+    push_rules: PushRulesConfig = field(default_factory=PushRulesConfig)
     report_retention: int = 30
 
 
@@ -233,6 +241,12 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
         p = raw["policies"]
         config.policies.fail_open = p.get("fail_open", config.policies.fail_open)
         config.policies.interactive_fallback = p.get("interactive_fallback", config.policies.interactive_fallback)
+
+    if "push_rules" in raw and isinstance(raw["push_rules"], dict):
+        pr = raw["push_rules"]
+        config.push_rules.enabled = bool(pr.get("enabled", True))
+        config.push_rules.enable = list(pr.get("enable") or [])
+        config.push_rules.disable = list(pr.get("disable") or [])
 
     if "report_retention" in raw:
         config.report_retention = int(raw["report_retention"])

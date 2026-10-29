@@ -170,5 +170,6 @@ class TestVisualAndUnrelated(GitRepoTestCase):
             "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc123def456",
             'password = "hunter2secret"',
             "AKIAIOSFODNN7ABCDEF1",
+            "MAPS_API_KEY=AIza" + "SyA1234567890abcdefghijklmnopqrstuv",
         ]:
             self.assertTrue(hit(secret), secret)

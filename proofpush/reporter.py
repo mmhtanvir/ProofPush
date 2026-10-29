@@ -90,12 +90,12 @@ class ReportGenerator:
         print(f"  Regressions:        {data.regressions_count}")
         print(f"  Not tested:         {data.not_tested_count}")
 
-        # Print Regressions
-        regressions = [f for f in data.findings if f.category == "REGRESSION"]
-        if regressions:
-            for r in regressions:
+        # Print everything that needs attention (regressions, warnings, blocked checks, suspicious pushes, notices)
+        attention = [f for f in data.findings if f.category not in ("UNCHANGED", "EXPECTED_CHANGE", "NEW_FUNCTIONALITY")]
+        if attention:
+            for r in attention:
                 print("\n" + "-" * 60)
-                print("REGRESSION")
+                print(r.category.replace("_", " ") + (" (CRITICAL)" if r.is_critical and r.category != "REGRESSION" else ""))
                 print(f"Target: {r.target}")
                 print(f"Before:\n{r.before_behavior}")
                 print(f"After:\n{r.after_behavior}")

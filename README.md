@@ -107,6 +107,33 @@ flowchart LR
 
 ---
 
+## 🚨 Suspicious Push Rules
+
+Every push is also checked against **103 rules** for supply-chain and tampering patterns, ported from [Pushguard](https://github.com/saadiqayyum/pushguard)'s catalog (MIT, see `proofpush/PUSHGUARD_LICENSE`). They run locally from git alone, so they work in any repo, including unconfigured ones under `install --global`.
+
+| Pack | Examples |
+|---|---|
+| Core | force push, trojan-source bidi/invisible characters, code hidden by padding, git hooks, `.gitattributes` filters, submodules |
+| CI | `pull_request_target`, secret exfiltration, script injection, unpinned actions, widened permissions |
+| AI agents | edits to `CLAUDE.md`/`AGENTS.md`/`.cursor/rules`, hidden text in agent instructions, auto-approve / permission-skip settings |
+| JavaScript, Python, Go, Rust, C/C++, JVM, .NET, Ruby, PHP | install hooks, build scripts that run commands, dependencies from URLs, obfuscated payloads |
+| Secrets, shell, containers, binaries | committed keys and `.env` files, `curl \| sh`, reverse shells, cron/launchd jobs, privileged containers, committed executables |
+
+- **critical**: blocks in `strict` mode; needs approval in `interactive` (AI agents are blocked)
+- **high**: needs approval in `interactive`
+- **medium / low**: shown as notices
+
+Six rules need facts only the Git host has (PR review state, the pushing account) and are skipped locally. Tune per repo:
+
+```yaml
+push_rules:
+  disable: [py-obfuscated-payload]      # rule ids from the finding title
+  enable: [rust-unsafe-block-added]     # rules that are off by default
+  # enabled: false                      # turn the whole catalog off
+```
+
+---
+
 ## 🤖 AI Coding Agents
 
 ProofPush runs inside `git push`, so it works with any AI CLI that pushes: Claude Code, Codex CLI, Gemini CLI, Cursor, Aider, Copilot CLI and others. No plugin needed.
@@ -250,7 +277,7 @@ application:
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |
 | `proofpush doctor` | Checks health of Git, Playwright, ports, and configuration |
-| `proofpush test` | Runs the built-in 35-scenario test suite |
+| `proofpush test` | Runs the built-in 40-scenario test suite |
 | `proofpush install --global` | Enables ProofPush in every repo on this machine. Repos without `.proofpush.yml` get git-only checks; each repo's own `.git/hooks` keep running |
 | `proofpush uninstall` | Safely removes hook and restores legacy hooks |
 
@@ -266,11 +293,11 @@ application:
 
 ## 🧪 Built-in Test Suite
 
-ProofPush is tested against 35 real-world developer scenarios:
+ProofPush is tested against 40 real-world developer scenarios:
 
 ```bash
 proofpush test
-# Ran 35 tests in 12s (OK)
+# Ran 40 tests in 12s (OK)
 ```
 
 Includes verification for force-pushes, multi-commit pushes, unattended AI agent pushes, `--no-verify` bypass, prompt injection defense in commit messages, destructive action prevention, and reverted past fixes.

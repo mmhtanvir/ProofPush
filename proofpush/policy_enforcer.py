@@ -37,7 +37,7 @@ class PolicyEnforcer:
     ) -> EnforcementDecision:
         """Evaluate audit findings against the enforcement policy."""
         has_critical_regression = any(f.is_critical or f.category == "REGRESSION" for f in findings)
-        has_warning = any(f.category in ("REGRESSION", "POSSIBLE_REGRESSION", "REMOVED_FUNCTIONALITY", "BLOCKED") for f in findings)
+        has_warning = any(f.category in ("REGRESSION", "POSSIBLE_REGRESSION", "REMOVED_FUNCTIONALITY", "BLOCKED", "SUSPICIOUS_PUSH") for f in findings)
         has_secret = bool(security_result and security_result.secrets_found)
         has_deleted_tests = bool(security_result and security_result.deleted_tests)
 
@@ -79,7 +79,7 @@ class PolicyEnforcer:
                 return EnforcementDecision(
                     allowed=False,
                     decision_label="BLOCKED",
-                    reason="Critical functional or route regressions detected between baseline and proposed version.",
+                    reason="Critical regressions or suspicious changes detected in this push.",
                     exit_code=1,
                 )
             return EnforcementDecision(
@@ -155,7 +155,7 @@ class PolicyEnforcer:
                     webbrowser.open(f"file://{report_html_path}")
                 elif choice in ("i", "inspect"):
                     for idx, f in enumerate(findings):
-                        if f.category in ("REGRESSION", "POSSIBLE_REGRESSION", "BLOCKED"):
+                        if f.category in ("REGRESSION", "POSSIBLE_REGRESSION", "BLOCKED", "SUSPICIOUS_PUSH"):
                             say(f"\n--- Finding #{idx + 1} ---")
                             say(f"Target: {f.target}")
                             say(f"Error:  {f.after_behavior}")

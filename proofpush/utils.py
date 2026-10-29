@@ -21,6 +21,7 @@ SECRET_PATTERNS = [
     # so identifiers like `task-list-item-container` or `risk-assessment-...` don't match
     (re.compile(r'(?<![A-Za-z0-9_\-])(sk-(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{20,})'), '[REDACTED_API_KEY]'),
     (re.compile(r'(ghp_[a-zA-Z0-9]{36,})'), '[REDACTED_GITHUB_TOKEN]'),
+    (re.compile(r'(?<![0-9A-Za-z_\-])(AIza[0-9A-Za-z_\-]{35})(?![0-9A-Za-z_\-])'), '[REDACTED_GOOGLE_API_KEY]'),
     (re.compile(r'(github_pat_[a-zA-Z0-9_]{50,})'), '[REDACTED_GITHUB_PAT]'),
     (re.compile(r'\b(AKIA[0-9A-Z]{16})\b'), '[REDACTED_AWS_KEY_ID]'),
     (re.compile(r'(bearer\s+(?=[a-zA-Z0-9_\-\.]*\d)[a-zA-Z0-9_\-\.]{20,})', re.IGNORECASE), 'Bearer [REDACTED_TOKEN]'),

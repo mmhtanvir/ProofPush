@@ -56,7 +56,7 @@ class TestPoliciesAndEnvironments(GitRepoTestCase):
         decision = enforcer.evaluate(findings=findings)
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.exit_code, 1)
-        self.assertIn("Critical functional or route regressions detected", decision.reason)
+        self.assertIn("Critical regressions or suspicious changes detected", decision.reason)
 
     def test_scenario_23_inconclusive_test_under_advisory_mode(self):
         """Scenario 23: In advisory mode, findings are reported but push is allowed with exit code 0."""

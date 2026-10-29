@@ -1,0 +1,1476 @@
+{
+  "source": "https://github.com/saadiqayyum/pushguard/tree/39ad7279fd762e08b4f9e9548d93e0d0104ea6a6/lib/rules/catalog (converted unchanged from TypeScript to JSON)",
+  "license": "MIT, Copyright (c) 2026 Saad Qayyum, see PUSHGUARD_LICENSE",
+  "local_changes": [
+    "shell-pipe-to-interpreter: first pattern ignores `||` (logical OR in JS/TS/shell was matching `|| node`)",
+    "hardcoded-ip-address: also skips RFC 5737 documentation ranges 192.0.2.x, 198.51.100.x, 203.0.113.x",
+    "shell-scheduled-task: excludes **/Info.plist (iOS/macOS app manifests, not launchd jobs)"
+  ],
+  "rules": [
+    {
+      "id": "force-push",
+      "description": "Any force push to any branch",
+      "severity": "critical",
+      "when": {
+        "forced": true
+      },
+      "pack": "core"
+    },
+    {
+      "id": "trojan-source",
+      "description": "Source that renders differently than it executes: bidi overrides, invisible characters",
+      "severity": "critical",
+      "unicode_risk": "controls",
+      "pack": "core"
+    },
+    {
+      "id": "homoglyph-identifier",
+      "description": "A character from another script sitting inside an otherwise Latin identifier",
+      "severity": "high",
+      "unicode_risk": "confusables",
+      "enabled": false,
+      "pack": "core"
+    },
+    {
+      "id": "hidden-by-padding",
+      "description": "A line indented far enough to push its code out of view in a diff",
+      "severity": "high",
+      "added_lines": [
+        "^[ \\t]{200,}",
+        "\\S[ \\t]{150,}\\S"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "invisible-codepoint-run",
+      "description": "A run of invisible code points (variation selectors, tags, private use, zero-width), the shape of an encoded payload",
+      "severity": "critical",
+      "added_lines": "(?:[\\uFE00-\\uFE0F\\u200B-\\u200D\\u2060-\\u2064\\uE000-\\uF8FF]|\\uDB40[\\uDC00-\\uDDEF]|[\\uDB80-\\uDBFF][\\uDC00-\\uDFFF]){8}",
+      "pack": "core"
+    },
+    {
+      "id": "invisible-private-use",
+      "description": "A Private Use Area character, which renders as nothing or a box and no Unicode check names",
+      "severity": "high",
+      "paths": [
+        "**"
+      ],
+      "exclude_paths": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.less",
+        "**/*.svg",
+        "**/*.ttf",
+        "**/*.otf",
+        "**/*.woff*"
+      ],
+      "added_lines": "[\\uE000-\\uF8FF]|[\\uDB80-\\uDBFF][\\uDC00-\\uDFFF]",
+      "pack": "core"
+    },
+    {
+      "id": "long-line-added",
+      "description": "A source line over 500 columns, where a reviewer stops reading",
+      "severity": "medium",
+      "paths": [
+        "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}",
+        "**/*.{py,rb,php,go,rs,java,kt,scala,cs,c,cc,cpp,h,hpp,swift}",
+        "**/*.{sh,bash,zsh,ps1,bat,cmd,pl,lua}"
+      ],
+      "exclude_paths": [
+        "**/*.min.*",
+        "**/dist/**",
+        "**/vendor/**",
+        "**/*.snap",
+        "**/__snapshots__/**"
+      ],
+      "added_lines": "^.{500}",
+      "pack": "core"
+    },
+    {
+      "id": "impersonated-commit",
+      "description": "A commit claiming another account's authorship reached a branch without review",
+      "severity": "critical",
+      "when": {
+        "author_mismatch": true,
+        "unreviewed": true
+      },
+      "pack": "core"
+    },
+    {
+      "id": "fake-merge-commit",
+      "description": "A commit says it merged a pull request, and no pull request contains it",
+      "severity": "critical",
+      "commit_message": "^Merge pull request #\\d+",
+      "when": {
+        "unreviewed": true
+      },
+      "pack": "core"
+    },
+    {
+      "id": "unreviewed-push-to-main",
+      "description": "Code reached a protected branch without a pull request",
+      "severity": "high",
+      "branches": [
+        "main",
+        "master",
+        "release/*",
+        "develop"
+      ],
+      "when": {
+        "unreviewed": true
+      },
+      "enabled": false,
+      "pack": "core"
+    },
+    {
+      "id": "first-push-by-account",
+      "description": "An account pushed to this repository for the first time",
+      "severity": "medium",
+      "when": {
+        "sender_first_push": true
+      },
+      "pack": "core"
+    },
+    {
+      "id": "branch-deleted",
+      "description": "Branch deleted on a protected-pattern name",
+      "severity": "medium",
+      "branches": [
+        "main",
+        "master",
+        "release/*"
+      ],
+      "when": {
+        "branch_deleted": true
+      },
+      "pack": "core"
+    },
+    {
+      "id": "off-hours-push",
+      "description": "Push outside 04:00-18:00 UTC working window",
+      "severity": "low",
+      "branches": [
+        "main",
+        "master"
+      ],
+      "when": {
+        "hour_utc": {
+          "not_between": [
+            4,
+            18
+          ]
+        }
+      },
+      "pack": "core"
+    },
+    {
+      "id": "protection-removed",
+      "description": "Workflow, CODEOWNERS, or hook config deleted",
+      "severity": "critical",
+      "paths": [
+        ".github/workflows/**",
+        "CODEOWNERS",
+        ".github/CODEOWNERS",
+        "docs/CODEOWNERS",
+        ".husky/**",
+        ".pre-commit-config.yaml"
+      ],
+      "change_type": [
+        "removed"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "reviewers-and-ci-in-one-push",
+      "description": "One push changed both the review rules and the CI that runs with your secrets",
+      "severity": "critical",
+      "all_of": [
+        [
+          "CODEOWNERS",
+          ".github/CODEOWNERS",
+          "docs/CODEOWNERS",
+          ".github/**/CODEOWNERS"
+        ],
+        [
+          ".github/workflows/**"
+        ]
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "env-file-committed",
+      "description": "Dotenv file pushed to the repo",
+      "severity": "critical",
+      "paths": [
+        "**/.env",
+        "**/.env.*"
+      ],
+      "exclude_paths": [
+        "**/.env.example",
+        "**/.env.sample",
+        "**/.env.template"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "editor-autorun-changed",
+      "description": "Editor config that runs commands on open was modified",
+      "severity": "high",
+      "paths": [
+        "**/.vscode/tasks.json",
+        "**/.vscode/settings.json",
+        "**/.vscode/launch.json",
+        "**/*.code-workspace",
+        "**/.idea/**/*.xml",
+        "**/.run/*.run.xml",
+        "**/.devcontainer/**",
+        "**/.devcontainer.json",
+        "**/.envrc",
+        "**/.zed/tasks.json"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "editor-task-runs-on-open",
+      "description": "An editor task set to run when the folder opens, or workspace trust switched off",
+      "severity": "critical",
+      "paths": [
+        "**/.vscode/tasks.json",
+        "**/.vscode/settings.json",
+        "**/*.code-workspace"
+      ],
+      "added_lines": [
+        "\"runOn\"\\s*:\\s*\"folderOpen\"",
+        "\"task\\.allowAutomaticTasks\"\\s*:\\s*\"on\"",
+        "\"security\\.workspace\\.trust\\.enabled\"\\s*:\\s*false"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "git-hooks-added",
+      "description": "A git hook or hooks path that runs on ordinary git commands",
+      "severity": "critical",
+      "paths": [
+        ".githooks/**",
+        ".husky/**",
+        "**/.git/hooks/**"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "gitattributes-filter",
+      "description": "A .gitattributes filter, diff or merge driver other than Git LFS or a built-in",
+      "severity": "high",
+      "paths": [
+        "**/.gitattributes"
+      ],
+      "added_lines": [
+        "\\bfilter=(?!lfs\\b)",
+        "\\bmerge=(?!(lfs|union|binary|text)\\b)",
+        "\\bdiff=(?!(lfs|ada|bash|bibtex|cpp|csharp|css|dts|elixir|fortran|fountain|golang|html|java|kotlin|markdown|matlab|objc|pascal|perl|php|python|ruby|rust|scheme|tex)\\b)"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "gitattributes-hides-from-review",
+      "description": "Paths marked generated, vendored or export-ignore, which review tools collapse or skip",
+      "severity": "low",
+      "paths": [
+        "**/.gitattributes"
+      ],
+      "added_lines": "linguist-generated|linguist-vendored|export-ignore",
+      "pack": "core"
+    },
+    {
+      "id": "gitmodules-changed",
+      "description": "A submodule added or repointed",
+      "severity": "high",
+      "paths": [
+        "**/.gitmodules"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "gitmodules-suspicious",
+      "description": "A submodule entry with control characters, a .git path component, or an option or ext:: URL",
+      "severity": "critical",
+      "paths": [
+        "**/.gitmodules"
+      ],
+      "added_lines": [
+        "^\\s*(path|url)\\s*=.*[\\x00-\\x08\\x0b-\\x1f\\x7f]",
+        "^\\s*path\\s*=\\s*(\\S*/)?\\.[gG][iI][tT](/|\\s*$)",
+        "^\\s*url\\s*=\\s*(-|ext::|file://)"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "security-process-changed",
+      "description": "Security contact or fuzzing configuration changed",
+      "severity": "medium",
+      "paths": [
+        "**/SECURITY.md",
+        "**/.clusterfuzzlite/**",
+        "**/oss-fuzz/**",
+        "**/fuzz/build.sh"
+      ],
+      "change_type": [
+        "added",
+        "modified",
+        "removed"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "version-bump-touches-code",
+      "description": "A commit labelled as a version bump or release that also changes source code",
+      "severity": "medium",
+      "paths": [
+        "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}",
+        "**/*.{py,rb,php,go,rs,java,kt,scala,cs,c,cc,cpp,h,hpp,swift}",
+        "**/*.{sh,bash,zsh,ps1,bat,cmd,pl,lua}"
+      ],
+      "commit_message": [
+        "^(chore|build|release)(\\([^)]{0,40}\\))?!?:\\s*(bump|release|version)",
+        "^[Bb]ump (version|to v?\\d)",
+        "^[Rr]elease v?\\d",
+        "^v?\\d+\\.\\d+\\.\\d+$"
+      ],
+      "pack": "core"
+    },
+    {
+      "id": "environment-serialized",
+      "description": "The whole process environment packaged up, which is how credentials leave",
+      "severity": "critical",
+      "added_lines": "JSON\\.stringify\\(\\s*process\\.env|json\\.dumps\\(\\s*(os\\.environ|dict\\()|Object\\.(entries|assign|keys)\\(\\s*process\\.env|\\.\\.\\.process\\.env|btoa\\(\\s*JSON\\.stringify|(body|data|payload)\\s*[:=]\\s*process\\.env",
+      "pack": "exfiltration"
+    },
+    {
+      "id": "hardcoded-ip-address",
+      "description": "A network address written as a raw IP, which is how a beacon finds its server",
+      "severity": "high",
+      "added_lines": "['\"](?!(?:127|10|0|255)\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|192\\.0\\.2\\.|198\\.51\\.100\\.|203\\.0\\.113\\.)\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}['\"]|https?://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}",
+      "pack": "exfiltration"
+    },
+    {
+      "id": "c2-decentralized-resolver",
+      "description": "A blockchain, IPFS, Nostr, DHT or calendar lookup, used by recent malware to find its server",
+      "severity": "high",
+      "paths": [
+        "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,py}"
+      ],
+      "added_lines": [
+        "ethers\\.(Contract|JsonRpcProvider|providers)|new Web3\\(|web3\\.eth\\.(call|Contract|getStorageAt)|\"eth_call\"",
+        "api\\.trongrid\\.io|getSignaturesForAddress|bsc-dataseed",
+        "ipfs\\.io/ipfs/|cloudflare-ipfs\\.com|dweb\\.link|gateway\\.pinata\\.cloud",
+        "nostr-tools|wss://relay\\.|\\bnpub1[0-9a-z]{20}",
+        "bittorrent-dht|new DHT\\(",
+        "calendar\\.app\\.google/|api\\.github\\.com/search/commits"
+      ],
+      "pack": "exfiltration"
+    },
+    {
+      "id": "secret-private-key",
+      "description": "A private key committed",
+      "severity": "critical",
+      "added_lines": "-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY",
+      "pack": "secrets"
+    },
+    {
+      "id": "secret-cloud-credential",
+      "description": "A cloud provider credential committed",
+      "severity": "critical",
+      "added_lines": "AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|ya29\\.[0-9A-Za-z_-]+|SG\\.[0-9A-Za-z_-]{22}",
+      "pack": "secrets"
+    },
+    {
+      "id": "secret-service-token",
+      "description": "A token for a developer service committed",
+      "severity": "critical",
+      "added_lines": "gh[pousr]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{82}|xox[baprs]-[0-9A-Za-z-]{10,}|sk-[A-Za-z0-9]{32,}|sk_live_[0-9A-Za-z]{24,}|npm_[0-9A-Za-z]{36}|dop_v1_[0-9a-f]{64}|glpat-[0-9A-Za-z_-]{20}",
+      "pack": "secrets"
+    },
+    {
+      "id": "secret-credential-file",
+      "description": "A credential or keystore file committed",
+      "severity": "critical",
+      "paths": [
+        "**/*.pem",
+        "**/*.key",
+        "**/*.p12",
+        "**/*.pfx",
+        "**/*.jks",
+        "**/*.keystore",
+        "**/id_rsa",
+        "**/id_ed25519",
+        "**/.netrc",
+        "**/.pgpass",
+        "**/credentials",
+        "**/.aws/**",
+        "**/kubeconfig",
+        "**/*.kubeconfig",
+        "**/serviceaccount*.json"
+      ],
+      "exclude_paths": [
+        "**/*.pub",
+        "**/test/**",
+        "**/tests/**",
+        "**/fixtures/**"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "secrets"
+    },
+    {
+      "id": "ci-workflow-changed",
+      "description": "GitHub Actions workflow created or modified",
+      "severity": "high",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actions/**"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "ci"
+    },
+    {
+      "id": "ci-pull-request-target",
+      "description": "A workflow running on pull_request_target, with secrets, against a fork's code",
+      "severity": "critical",
+      "paths": [
+        ".github/workflows/**"
+      ],
+      "added_lines": "pull_request_target|workflow_run",
+      "pack": "ci"
+    },
+    {
+      "id": "ci-action-unpinned",
+      "description": "An action pinned to a tag or branch rather than a commit SHA",
+      "severity": "high",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actions/**"
+      ],
+      "added_lines": "^[\\s-]*uses:\\s*['\"]?[^\\s@'\"#]+@(?![0-9a-f]{40}\\b)",
+      "pack": "ci"
+    },
+    {
+      "id": "ci-secret-exfiltration",
+      "description": "A workflow step piping secrets or the environment to the network",
+      "severity": "critical",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actions/**",
+        "**/.gitlab-ci.yml",
+        "**/azure-pipelines.yml",
+        "**/Jenkinsfile"
+      ],
+      "added_lines": [
+        "printenv|env\\s*\\||\\benv\\s*>\\s*\\S",
+        "curl\\s+(-[sSkLfv]+\\s+)?(-X\\s*POST\\s+)?(-d|--data|-F|-T)|wget\\s+(-q\\s+)?--post-(data|file)",
+        "base64\\s+-w|base64[^|]{0,60}\\|\\s*base64",
+        "nc\\s+-",
+        "toJSON\\(\\s*secrets\\s*\\)",
+        "/proc/[^\\s/]{1,12}/(mem|environ)\\b|Runner\\.Worker"
+      ],
+      "pack": "ci"
+    },
+    {
+      "id": "ci-script-injection",
+      "description": "Attacker-controlled event text (titles, bodies, branch names) expanded inside a script",
+      "severity": "critical",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actions/**"
+      ],
+      "added_lines": "^(?!\\s*[\\w-]+:\\s*['\"]?\\$\\{\\{).*\\$\\{\\{\\s*github\\.(head_ref|event\\.(issue\\.(title|body)|pull_request\\.(title|body|head\\.(ref|label))|comment\\.body|review\\.body|review_comment\\.body|discussion\\.(title|body)|head_commit\\.(message|author)|commits|pages|workflow_run\\.head_(branch|commit)))",
+      "pack": "ci"
+    },
+    {
+      "id": "ci-checkout-pr-head",
+      "description": "A workflow checking out the pull request's own code, which under pull_request_target runs it with secrets",
+      "severity": "high",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actions/**"
+      ],
+      "added_lines": [
+        "ref:\\s*['\"]?\\$\\{\\{\\s*github\\.(head_ref|event\\.(pull_request\\.head\\.(sha|ref)|workflow_run\\.head_(sha|branch)))",
+        "refs/pull/\\$\\{\\{|gh pr checkout"
+      ],
+      "pack": "ci"
+    },
+    {
+      "id": "ci-runner-registration",
+      "description": "A self-hosted Actions runner downloaded or registered from repository code",
+      "severity": "high",
+      "added_lines": [
+        "config\\.(sh|cmd)\\s[^\\n]{0,120}--(url|token)\\b",
+        "actions-runner-(linux|osx|win)-",
+        "\\bsvc\\.sh\\s+install"
+      ],
+      "pack": "ci"
+    },
+    {
+      "id": "worm-persistence-indicator",
+      "description": "A file name, runner name or commit message left by a known repository worm",
+      "severity": "critical",
+      "any_of": [
+        {
+          "paths": [
+            ".github/workflows/shai-hulud*.y*ml",
+            ".github/workflows/formatter_[0-9]*.y*ml",
+            ".github/workflows/github_actions_security.y*ml"
+          ],
+          "change_type": [
+            "added",
+            "modified"
+          ]
+        },
+        {
+          "commit_message": [
+            "^Shai-Hulud( Migration)?$",
+            "^Add Github Actions Security workflow$"
+          ]
+        },
+        {
+          "added_lines": "SHA1HULUD"
+        }
+      ],
+      "pack": "ci"
+    },
+    {
+      "id": "worm-workflow-lookalike",
+      "description": "A new workflow named or triggered like a known worm's backdoor (discussion trigger, security-audit, format-check)",
+      "severity": "high",
+      "any_of": [
+        {
+          "paths": [
+            ".github/workflows/discussion.y*ml",
+            ".github/workflows/security-audit.y*ml",
+            ".github/workflows/format-check.y*ml"
+          ],
+          "change_type": [
+            "added"
+          ]
+        },
+        {
+          "paths": [
+            ".github/workflows/**"
+          ],
+          "added_lines": "^\\s*on:[\\s\\[]*discussion|^\\s*discussion(_comment)?:"
+        }
+      ],
+      "pack": "ci"
+    },
+    {
+      "id": "ci-agent-shaped-push",
+      "description": "A workflow changed outside working hours with no pull request, the shape of a stolen token at work",
+      "severity": "high",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actions/**"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "when": {
+        "unreviewed": true,
+        "hour_utc": {
+          "not_between": [
+            4,
+            18
+          ]
+        }
+      },
+      "pack": "ci"
+    },
+    {
+      "id": "ci-self-hosted-runner",
+      "description": "A job moved onto a self-hosted runner",
+      "severity": "high",
+      "paths": [
+        ".github/workflows/**"
+      ],
+      "added_lines": "self-hosted",
+      "pack": "ci"
+    },
+    {
+      "id": "ci-permissions-widened",
+      "description": "Workflow token permissions widened to write",
+      "severity": "high",
+      "paths": [
+        ".github/workflows/**"
+      ],
+      "added_lines": "permissions:\\s*write-all|contents:\\s*write|id-token:\\s*write",
+      "pack": "ci"
+    },
+    {
+      "id": "ci-other-provider-changed",
+      "description": "A non-GitHub CI configuration changed",
+      "severity": "high",
+      "paths": [
+        "**/.gitlab-ci.yml",
+        "**/Jenkinsfile",
+        "**/azure-pipelines.yml",
+        "**/.circleci/**",
+        "**/.travis.yml",
+        "**/bitbucket-pipelines.yml",
+        "**/.drone.yml",
+        "**/buildkite.yml",
+        "**/.teamcity/**"
+      ],
+      "pack": "ci"
+    },
+    {
+      "id": "agent-instructions-changed",
+      "description": "Instructions a coding agent follows were created or modified",
+      "severity": "high",
+      "paths": [
+        "**/CLAUDE.md",
+        "**/CLAUDE.local.md",
+        "**/AGENTS.md",
+        "**/GEMINI.md",
+        "**/.cursorrules",
+        "**/.windsurfrules",
+        "**/.clinerules",
+        "**/.cursor/rules/**",
+        "**/.windsurf/rules/**",
+        "**/.github/copilot-instructions.md",
+        "**/.github/instructions/**",
+        "**/.github/prompts/**",
+        "**/.claude/agents/**",
+        "**/.claude/commands/**",
+        "**/.claude/skills/**"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "ai-agents"
+    },
+    {
+      "id": "agent-instructions-hidden-text",
+      "description": "Invisible or bidi characters in agent instructions, which a reviewer cannot see and the agent obeys",
+      "severity": "critical",
+      "paths": [
+        "**/CLAUDE.md",
+        "**/CLAUDE.local.md",
+        "**/AGENTS.md",
+        "**/GEMINI.md",
+        "**/.cursorrules",
+        "**/.windsurfrules",
+        "**/.clinerules",
+        "**/.cursor/rules/**",
+        "**/.windsurf/rules/**",
+        "**/.github/copilot-instructions.md",
+        "**/.github/instructions/**",
+        "**/.github/prompts/**",
+        "**/.claude/agents/**",
+        "**/.claude/commands/**",
+        "**/.claude/skills/**"
+      ],
+      "unicode_risk": "controls",
+      "pack": "ai-agents"
+    },
+    {
+      "id": "agent-tool-config-changed",
+      "description": "An MCP server or agent settings file, which can run commands on the developer's machine",
+      "severity": "high",
+      "paths": [
+        "**/.mcp.json",
+        "**/mcp.json",
+        "**/.vscode/mcp.json",
+        "**/.cursor/mcp.json",
+        "**/claude_desktop_config.json",
+        "**/.claude/settings.json",
+        "**/.claude/settings.local.json",
+        "**/.gemini/settings.json",
+        "**/.cursor/hooks.json",
+        "**/.cursor/environment.json",
+        "**/.codex/config.toml"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "ai-agents"
+    },
+    {
+      "id": "agent-hook-or-auto-approve",
+      "description": "An agent hook that runs a command, or agent approvals switched off",
+      "severity": "critical",
+      "paths": [
+        "**/.claude/settings.json",
+        "**/.claude/settings.local.json",
+        "**/.cursor/hooks.json",
+        "**/.gemini/settings.json",
+        "**/.vscode/settings.json",
+        "**/*.code-workspace"
+      ],
+      "added_lines": [
+        "\"hooks\"\\s*:",
+        "\"(SessionStart|SessionEnd|PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop|PreCompact|Notification)\"\\s*:",
+        "\"defaultMode\"\\s*:\\s*\"bypassPermissions\"|\"enableAllProjectMcpServers\"\\s*:\\s*true|\"apiKeyHelper\"\\s*:",
+        "\"chat\\.tools\\.(global\\.)?autoApprove\"\\s*:\\s*true"
+      ],
+      "pack": "ai-agents"
+    },
+    {
+      "id": "agent-cli-permission-skip",
+      "description": "A coding-agent CLI invoked with its permission checks disabled",
+      "severity": "high",
+      "added_lines": "--dangerously-skip-permissions|--dangerously-bypass-approvals|--trust-all-tools|--allow-all-tools|--yolo\\b|--approval-mode[= ]yolo",
+      "pack": "ai-agents"
+    },
+    {
+      "id": "agent-prompt-injection",
+      "description": "Text written to steer an AI reviewer or agent rather than a human reader",
+      "severity": "high",
+      "added_lines": [
+        "[Ii]gnore (all |any )?(the )?(previous|prior|above|earlier) (instructions|prompts?|rules)|IGNORE (ALL )?PREVIOUS INSTRUCTIONS",
+        "[Dd]o not (flag|report|mention) (this|these|it)|[Aa]pprove this (PR|pull request|change|commit)",
+        "[Yy]ou are now (a|an) |[Dd]isregard (all |the )?(previous|prior|above|your) |[Nn]ew system prompt|</?system>|[Nn]ote to (the )?AI",
+        "[Tt]his (code|change|file|function|commit|PR) (has been|was|is) (already )?(reviewed|audited|verified|approved)",
+        "[Ss]ecurity[- ](reviewed|audited|approved|cleared)\\b|[Ss]afe to (merge|ignore|approve)\\b",
+        "(scanner|scan|audit) (output|results?):?\\s*0 (findings|issues|vulnerabilities)"
+      ],
+      "pack": "ai-agents"
+    },
+    {
+      "id": "binary-executable-committed",
+      "description": "An executable or library committed to a source repository",
+      "severity": "critical",
+      "paths": [
+        "**/*.exe",
+        "**/*.dll",
+        "**/*.so",
+        "**/*.so.*",
+        "**/*.dylib",
+        "**/*.o",
+        "**/*.a",
+        "**/*.msi",
+        "**/*.app/**",
+        "**/*.deb",
+        "**/*.rpm",
+        "**/*.pkg",
+        "**/*.dmg"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "binary"
+    },
+    {
+      "id": "binary-bytecode-committed",
+      "description": "Compiled bytecode or a packaged archive committed",
+      "severity": "high",
+      "paths": [
+        "**/*.pyc",
+        "**/*.pyo",
+        "**/*.class",
+        "**/*.jar",
+        "**/*.war",
+        "**/*.wasm",
+        "**/*.nupkg",
+        "**/*.gem"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "binary"
+    },
+    {
+      "id": "binary-archive-committed",
+      "description": "An archive or opaque blob committed, whose contents no diff can show",
+      "severity": "medium",
+      "paths": [
+        "**/*.zip",
+        "**/*.tar",
+        "**/*.tar.gz",
+        "**/*.tgz",
+        "**/*.7z",
+        "**/*.rar",
+        "**/*.xz",
+        "**/*.bin"
+      ],
+      "exclude_paths": [
+        "**/test/**",
+        "**/tests/**",
+        "**/fixtures/**",
+        "**/__fixtures__/**",
+        "**/testdata/**"
+      ],
+      "change_type": [
+        "added"
+      ],
+      "pack": "binary"
+    },
+    {
+      "id": "test-fixture-opaque-blob",
+      "description": "An opaque or compressed blob added under a test directory, where payloads have hidden as corrupt samples",
+      "severity": "medium",
+      "paths": [
+        "**/{test,tests,testdata,fixtures,__fixtures__,spec}/**/*.{bin,dat,raw,blob,img,xz,lzma,gz,bz2,zst,lz4,zip,7z,tar}"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "binary"
+    },
+    {
+      "id": "shell-pipe-to-interpreter",
+      "description": "Downloading a script and piping it straight into a shell",
+      "severity": "critical",
+      "added_lines": [
+        "(?<!\\|)\\|(?!\\|)\\s*(sudo\\s+)?(sh|bash|zsh|python|perl|ruby|node)\\b",
+        "\\b(ba|z)?sh\\s+(-c\\s+)?[\"']?(\\$\\(|<\\()\\s*(curl|wget)\\b",
+        "\\biex\\s*\\(|Invoke-Expression|\\|\\s*iex\\b",
+        "powershell(\\.exe)?\\s[^\\n]{0,40}-(e|enc|EncodedCommand)\\s"
+      ],
+      "pack": "shell"
+    },
+    {
+      "id": "shell-reverse-connection",
+      "description": "A reverse shell or raw network connection to a fixed host",
+      "severity": "critical",
+      "added_lines": "/dev/tcp/|nc\\s+-[a-z]*e|socat\\s|exec:/bin/|bash\\s+-i\\s",
+      "pack": "shell"
+    },
+    {
+      "id": "shell-profile-modified",
+      "description": "A shell startup file, which runs on every new terminal",
+      "severity": "critical",
+      "paths": [
+        "**/.bashrc",
+        "**/.bash_profile",
+        "**/.zshrc",
+        "**/.zshenv",
+        "**/.profile",
+        "**/.config/fish/**",
+        "**/.bash_aliases"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "shell"
+    },
+    {
+      "id": "shell-permissive-mode",
+      "description": "A file made world-writable or setuid",
+      "severity": "high",
+      "added_lines": "chmod\\s+(-[a-zA-Z]+\\s+)?(777|666|a\\+w|[24][0-7]{3})|chmod\\s+[ugoa]*\\+s",
+      "pack": "shell"
+    },
+    {
+      "id": "shell-scheduled-task",
+      "description": "A cron entry, systemd unit, or scheduled task added",
+      "severity": "critical",
+      "paths": [
+        "**/crontab",
+        "**/cron.d/**",
+        "**/*.service",
+        "**/*.timer",
+        "**/LaunchAgents/**",
+        "**/LaunchDaemons/**",
+        "**/*.plist"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "shell",
+      "exclude_paths": [
+        "**/Info.plist"
+      ]
+    },
+    {
+      "id": "container-fetch-and-run",
+      "description": "A Dockerfile downloading and executing something at build time",
+      "severity": "critical",
+      "paths": [
+        "**/Dockerfile*",
+        "**/*.dockerfile",
+        "**/Containerfile"
+      ],
+      "added_lines": "\\|\\s*(sudo\\s+)?(sh|bash|python|perl)\\b",
+      "pack": "container"
+    },
+    {
+      "id": "container-base-image-changed",
+      "description": "A base image repointed, or pinned to a mutable tag",
+      "severity": "high",
+      "paths": [
+        "**/Dockerfile*",
+        "**/*.dockerfile",
+        "**/docker-compose*.y*ml"
+      ],
+      "added_lines": "^\\s*FROM\\s|image:\\s*",
+      "pack": "container"
+    },
+    {
+      "id": "container-privileged",
+      "description": "A container granted privileged mode or the host namespace",
+      "severity": "critical",
+      "paths": [
+        "**/docker-compose*.y*ml",
+        "**/*.yaml",
+        "**/*.yml"
+      ],
+      "added_lines": "privileged:\\s*true|hostPID:\\s*true|hostNetwork:\\s*true|/var/run/docker\\.sock",
+      "pack": "container"
+    },
+    {
+      "id": "infra-state-or-provider-changed",
+      "description": "Terraform provider, backend, or external data source changed",
+      "severity": "high",
+      "paths": [
+        "**/*.tf",
+        "**/*.tfvars",
+        "**/*.hcl"
+      ],
+      "added_lines": "local-exec|remote-exec|data\\s+\"external\"|backend\\s+\"|source\\s*=\\s*\"(git|https?)",
+      "pack": "container"
+    },
+    {
+      "id": "js-install-hook-added",
+      "description": "npm lifecycle script added or changed",
+      "severity": "critical",
+      "paths": [
+        "**/package.json"
+      ],
+      "added_lines": "\"(pre|post)?install\"\\s*:|\"prepare\"\\s*:|\"(pre|post)pack\"\\s*:",
+      "pack": "javascript"
+    },
+    {
+      "id": "js-install-hook-generic-message",
+      "description": "An install hook changed under a commit message that says nothing",
+      "severity": "high",
+      "paths": [
+        "**/package.json"
+      ],
+      "added_lines": "\"(pre|post)?install\"\\s*:|\"prepare\"\\s*:|\"(pre|post)pack\"\\s*:",
+      "commit_message": "^([Ff]ix bugs and improve performance|[Uu]pdates?|[Ff]ix(es)?|[Mm]inor (fixes|changes|updates)|[Ii]mprovements?|[Ww]ip|[Cc]leanup|[Rr]efactor)\\.?$",
+      "pack": "javascript"
+    },
+    {
+      "id": "js-bin-entry-added",
+      "description": "A package bin entry added or changed, a second way to get code run",
+      "severity": "medium",
+      "paths": [
+        "**/package.json"
+      ],
+      "added_lines": "\"bin\"\\s*:",
+      "pack": "javascript"
+    },
+    {
+      "id": "js-obfuscated-payload",
+      "description": "Long base64 blob or dynamic code execution added",
+      "severity": "high",
+      "paths": [
+        "**/*.js",
+        "**/*.mjs",
+        "**/*.cjs",
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.mts",
+        "**/*.cts"
+      ],
+      "added_lines": "eval\\(|new Function\\(|child_process|[A-Za-z0-9+/]{200,}={0,2}",
+      "pack": "javascript"
+    },
+    {
+      "id": "js-npmrc-changed",
+      "description": "npm registry or auth configuration changed",
+      "severity": "critical",
+      "paths": [
+        "**/.npmrc",
+        "**/.yarnrc",
+        "**/.yarnrc.yml",
+        "**/bunfig.toml"
+      ],
+      "pack": "javascript"
+    },
+    {
+      "id": "js-lockfile-only-change",
+      "description": "A lockfile resolving a package from somewhere other than the public npm registry",
+      "severity": "high",
+      "paths": [
+        "**/package-lock.json",
+        "**/npm-shrinkwrap.json",
+        "**/yarn.lock",
+        "**/pnpm-lock.yaml",
+        "**/bun.lock"
+      ],
+      "added_lines": [
+        "\"resolved\"\\s*:\\s*\"(?!https://registry\\.npmjs\\.org/)",
+        "^\\s*resolved\\s+\"(?!https://registry\\.(yarnpkg\\.com|npmjs\\.org)/)",
+        "\"version\"\\s*:\\s*\"(git\\+|git:|github:|https?:|file:)",
+        "tarball:\\s*\\S",
+        "resolution:\\s*\"[^\"]{1,214}@(git\\+|git:|github:|https?:|file:)"
+      ],
+      "pack": "javascript"
+    },
+    {
+      "id": "js-dependency-from-url",
+      "description": "A dependency pointing at a URL, git ref, or local path instead of a version",
+      "severity": "high",
+      "paths": [
+        "**/package.json"
+      ],
+      "added_lines": "\"\\s*:\\s*\"(git\\+|git://|https?://|file:|github:|gitlab:|bitbucket:|git@)",
+      "pack": "javascript"
+    },
+    {
+      "id": "js-patch-package",
+      "description": "A patch applied to an installed dependency at install time",
+      "severity": "high",
+      "paths": [
+        "**/patches/**",
+        "**/*.patch"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "javascript"
+    },
+    {
+      "id": "py-install-hook-added",
+      "description": "Python packaging hook that runs code at install time",
+      "severity": "critical",
+      "paths": [
+        "**/setup.py",
+        "**/pyproject.toml",
+        "**/setup.cfg",
+        "**/conftest.py"
+      ],
+      "added_lines": "cmdclass|build_py|install_requires\\s*=|\\[build-system\\]|setuptools\\.setup",
+      "pack": "python"
+    },
+    {
+      "id": "py-dynamic-execution",
+      "description": "Dynamic execution or deserialisation that runs code",
+      "severity": "high",
+      "paths": [
+        "**/*.py",
+        "**/*.pyi"
+      ],
+      "added_lines": "\\bexec\\(|\\beval\\(|__import__\\(|pickle\\.loads|marshal\\.loads|yaml\\.load\\(",
+      "pack": "python"
+    },
+    {
+      "id": "py-obfuscated-payload",
+      "description": "Long base64 blob or encoded payload added to Python source",
+      "severity": "high",
+      "paths": [
+        "**/*.py"
+      ],
+      "added_lines": "base64\\.b64decode|codecs\\.decode|[A-Za-z0-9+/]{200,}={0,2}",
+      "pack": "python"
+    },
+    {
+      "id": "py-requirements-from-url",
+      "description": "A requirement pointing at a URL, VCS ref, or extra index",
+      "severity": "high",
+      "paths": [
+        "**/requirements*.txt",
+        "**/constraints*.txt",
+        "**/Pipfile"
+      ],
+      "added_lines": "^\\s*(-e |--extra-index-url|--index-url|git\\+|https?://)",
+      "pack": "python"
+    },
+    {
+      "id": "py-sitecustomize",
+      "description": "A module Python imports automatically at interpreter start",
+      "severity": "critical",
+      "paths": [
+        "**/sitecustomize.py",
+        "**/usercustomize.py",
+        "**/*.pth"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "python"
+    },
+    {
+      "id": "cpp-build-runs-command",
+      "description": "A build file that shells out during configure or build",
+      "severity": "critical",
+      "paths": [
+        "**/Makefile",
+        "**/makefile",
+        "**/*.mk",
+        "**/CMakeLists.txt",
+        "**/*.cmake",
+        "**/meson.build",
+        "**/SConstruct",
+        "**/configure",
+        "**/configure.ac",
+        "**/*.m4",
+        "**/Makefile.am",
+        "**/Makefile.in",
+        "**/*.gyp",
+        "**/*.gypi"
+      ],
+      "added_lines": "execute_process|add_custom_command|add_custom_target|\\$\\(shell |POST_BUILD|run_command\\(",
+      "pack": "cpp"
+    },
+    {
+      "id": "cpp-build-downloads",
+      "description": "A build file fetching something from the network",
+      "severity": "critical",
+      "paths": [
+        "**/Makefile",
+        "**/makefile",
+        "**/*.mk",
+        "**/CMakeLists.txt",
+        "**/*.cmake",
+        "**/meson.build",
+        "**/SConstruct",
+        "**/configure",
+        "**/configure.ac",
+        "**/*.m4",
+        "**/Makefile.am",
+        "**/Makefile.in",
+        "**/*.gyp",
+        "**/*.gypi"
+      ],
+      "added_lines": "curl |wget |FetchContent_Declare|ExternalProject_Add|file\\(DOWNLOAD",
+      "pack": "cpp"
+    },
+    {
+      "id": "cpp-process-execution",
+      "description": "Process or shell execution added to native source",
+      "severity": "high",
+      "paths": [
+        "**/*.c",
+        "**/*.cc",
+        "**/*.cpp",
+        "**/*.cxx",
+        "**/*.h",
+        "**/*.hpp",
+        "**/*.hxx",
+        "**/*.inl"
+      ],
+      "added_lines": "\\bsystem\\(|\\bpopen\\(|\\bexecve?\\(|execlp?\\(|CreateProcess|ShellExecute",
+      "pack": "cpp"
+    },
+    {
+      "id": "cpp-constructor-attribute",
+      "description": "Code marked to run before main()",
+      "severity": "critical",
+      "paths": [
+        "**/*.c",
+        "**/*.cc",
+        "**/*.cpp",
+        "**/*.cxx",
+        "**/*.h",
+        "**/*.hpp",
+        "**/*.hxx",
+        "**/*.inl"
+      ],
+      "added_lines": "__attribute__\\s*\\(\\s*\\(\\s*constructor|DllMain|_pragma\\s*\\(\\s*\"init",
+      "pack": "cpp"
+    },
+    {
+      "id": "cpp-linker-flag-changed",
+      "description": "Linker or preload configuration changed",
+      "severity": "high",
+      "paths": [
+        "**/Makefile",
+        "**/makefile",
+        "**/*.mk",
+        "**/CMakeLists.txt",
+        "**/*.cmake",
+        "**/meson.build",
+        "**/SConstruct",
+        "**/configure",
+        "**/configure.ac",
+        "**/*.m4",
+        "**/Makefile.am",
+        "**/Makefile.in",
+        "**/*.gyp",
+        "**/*.gypi",
+        "**/*.ld",
+        "**/*.lds"
+      ],
+      "added_lines": "LD_PRELOAD|-rpath|-Wl,|\\.so\\.[0-9]|LD_LIBRARY_PATH",
+      "pack": "cpp"
+    },
+    {
+      "id": "go-generate-directive",
+      "description": "A go:generate directive, which runs a command on `go generate`",
+      "severity": "high",
+      "paths": [
+        "**/*.go"
+      ],
+      "added_lines": "//go:generate",
+      "pack": "go"
+    },
+    {
+      "id": "go-cgo-added",
+      "description": "cgo block, which compiles and links C during a Go build",
+      "severity": "high",
+      "paths": [
+        "**/*.go"
+      ],
+      "added_lines": "import \"C\"|#cgo ",
+      "pack": "go"
+    },
+    {
+      "id": "go-process-execution",
+      "description": "Process execution or dynamic plugin loading added",
+      "severity": "high",
+      "paths": [
+        "**/*.go"
+      ],
+      "added_lines": "exec\\.Command|syscall\\.Exec|plugin\\.Open",
+      "pack": "go"
+    },
+    {
+      "id": "go-module-replace",
+      "description": "A replace or exclude directive repointing a dependency",
+      "severity": "critical",
+      "paths": [
+        "**/go.mod"
+      ],
+      "added_lines": "^\\s*replace |^\\s*exclude ",
+      "pack": "go"
+    },
+    {
+      "id": "rust-build-script",
+      "description": "A Cargo build script, which compiles and runs before the crate",
+      "severity": "critical",
+      "paths": [
+        "**/build.rs"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "rust"
+    },
+    {
+      "id": "rust-process-execution",
+      "description": "Process execution or a foreign function interface added",
+      "severity": "high",
+      "paths": [
+        "**/*.rs"
+      ],
+      "added_lines": "std::process::Command|Command::new|extern \"C\"|libloading",
+      "pack": "rust"
+    },
+    {
+      "id": "rust-dependency-from-source",
+      "description": "A dependency pointing at a git ref, path, or alternate registry",
+      "severity": "high",
+      "paths": [
+        "**/Cargo.toml"
+      ],
+      "added_lines": "\\bgit\\s*=|\\bpath\\s*=|\\bregistry\\s*=",
+      "pack": "rust"
+    },
+    {
+      "id": "rust-unsafe-block-added",
+      "description": "An unsafe block added",
+      "severity": "low",
+      "paths": [
+        "**/*.rs"
+      ],
+      "added_lines": "\\bunsafe\\s*\\{",
+      "enabled": false,
+      "pack": "rust"
+    },
+    {
+      "id": "jvm-build-runs-command",
+      "description": "A Gradle or Maven build executing a command or fetching code",
+      "severity": "critical",
+      "paths": [
+        "**/build.gradle",
+        "**/build.gradle.kts",
+        "**/settings.gradle*",
+        "**/pom.xml",
+        "**/*.jenkinsfile"
+      ],
+      "added_lines": "exec\\s*\\{|ProcessBuilder|Runtime\\.getRuntime|\\bexec-maven-plugin|<goal>exec</goal>",
+      "pack": "jvm"
+    },
+    {
+      "id": "jvm-repository-changed",
+      "description": "An artifact repository added or repointed",
+      "severity": "critical",
+      "paths": [
+        "**/build.gradle",
+        "**/build.gradle.kts",
+        "**/pom.xml",
+        "**/settings.xml",
+        "**/gradle.properties"
+      ],
+      "added_lines": "maven\\s*\\{|<repository>|<url>http|repositories\\s*\\{",
+      "pack": "jvm"
+    },
+    {
+      "id": "jvm-process-execution",
+      "description": "Process execution or reflective class loading added",
+      "severity": "high",
+      "paths": [
+        "**/*.java",
+        "**/*.kt",
+        "**/*.scala",
+        "**/*.groovy"
+      ],
+      "added_lines": "Runtime\\.getRuntime\\(\\)\\.exec|new ProcessBuilder|Class\\.forName|URLClassLoader|defineClass",
+      "pack": "jvm"
+    },
+    {
+      "id": "jvm-gradle-wrapper-changed",
+      "description": "The Gradle wrapper jar or its distribution URL changed",
+      "severity": "critical",
+      "paths": [
+        "**/gradle/wrapper/**",
+        "**/gradlew",
+        "**/gradlew.bat",
+        "**/mvnw",
+        "**/.mvn/**"
+      ],
+      "change_type": [
+        "added",
+        "modified"
+      ],
+      "pack": "jvm"
+    },
+    {
+      "id": "dotnet-build-runs-command",
+      "description": "An MSBuild target executing a command",
+      "severity": "critical",
+      "paths": [
+        "**/*.csproj",
+        "**/*.fsproj",
+        "**/*.vbproj",
+        "**/*.props",
+        "**/*.targets",
+        "**/Directory.Build.*"
+      ],
+      "added_lines": "<Exec |<PreBuildEvent|<PostBuildEvent|DownloadFile",
+      "pack": "dotnet"
+    },
+    {
+      "id": "dotnet-nuget-source-changed",
+      "description": "A NuGet package source added or repointed",
+      "severity": "critical",
+      "paths": [
+        "**/nuget.config",
+        "**/NuGet.Config",
+        "**/*.nuspec"
+      ],
+      "pack": "dotnet"
+    },
+    {
+      "id": "dotnet-process-execution",
+      "description": "Process execution or runtime assembly loading added",
+      "severity": "high",
+      "paths": [
+        "**/*.cs",
+        "**/*.fs",
+        "**/*.vb"
+      ],
+      "added_lines": "Process\\.Start|Assembly\\.Load|Activator\\.CreateInstance|DllImport",
+      "pack": "dotnet"
+    },
+    {
+      "id": "ruby-gem-from-source",
+      "description": "A gem pointing at a git ref, path, or alternate source",
+      "severity": "critical",
+      "paths": [
+        "**/Gemfile",
+        "**/*.gemspec"
+      ],
+      "added_lines": "\\bgit:|\\bgithub:|\\bpath:|^\\s*source ",
+      "pack": "ruby"
+    },
+    {
+      "id": "ruby-native-extension",
+      "description": "A native extension, which compiles and runs at gem install",
+      "severity": "critical",
+      "paths": [
+        "**/extconf.rb",
+        "**/ext/**/*.rb",
+        "**/Rakefile"
+      ],
+      "added_lines": "create_makefile|\\bsystem\\(|`|%x\\{",
+      "pack": "ruby"
+    },
+    {
+      "id": "ruby-dynamic-execution",
+      "description": "Dynamic execution or shell-out added",
+      "severity": "high",
+      "paths": [
+        "**/*.rb",
+        "**/*.rake",
+        "**/*.erb"
+      ],
+      "added_lines": "\\beval\\(|instance_eval|class_eval|Kernel\\.system|Open3\\.|%x\\{|`[^`]*`",
+      "pack": "ruby"
+    },
+    {
+      "id": "php-composer-script",
+      "description": "A Composer script or plugin, which runs on install",
+      "severity": "critical",
+      "paths": [
+        "**/composer.json"
+      ],
+      "added_lines": "\"scripts\"\\s*:|\"post-install-cmd\"|\"post-autoload-dump\"|\"repositories\"\\s*:",
+      "pack": "php"
+    },
+    {
+      "id": "php-dynamic-execution",
+      "description": "Dynamic execution, shell-out, or unserialisation added",
+      "severity": "critical",
+      "paths": [
+        "**/*.php",
+        "**/*.phtml",
+        "**/*.inc"
+      ],
+      "added_lines": "\\beval\\(|\\bassert\\(|\\bsystem\\(|shell_exec\\(|passthru\\(|proc_open\\(|popen\\(|\\bunserialize\\(|create_function\\(|preg_replace\\s*\\(\\s*['\"][^'\"]{0,80}e['\"]",
+      "pack": "php"
+    },
+    {
+      "id": "php-obfuscated-payload",
+      "description": "Encoded payload added to PHP source",
+      "severity": "critical",
+      "paths": [
+        "**/*.php",
+        "**/*.phtml",
+        "**/*.inc"
+      ],
+      "added_lines": "base64_decode|gzinflate|str_rot13|hex2bin|\\\\x[0-9a-fA-F]{2}\\\\x[0-9a-fA-F]{2}",
+      "pack": "php"
+    }
+  ]
+}
