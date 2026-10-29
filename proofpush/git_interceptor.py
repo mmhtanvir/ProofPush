@@ -7,6 +7,7 @@ hook chaining, worktree awareness, and recursion prevention.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
 import sys
@@ -44,9 +45,9 @@ if [ -n "${GLOBAL_HOOKS}" ]; then
 fi
 
 # GUI-launched AI tools (Cursor, VS Code agents) often run with a reduced PATH; fall back to the install-time path
-BIN_CMD="proofpush"
+BIN_CMD=(proofpush)
 if ! command -v proofpush >/dev/null 2>&1; then
-    BIN_CMD="__PROOFPUSH_BIN__"
+    BIN_CMD=(__PROOFPUSH_BIN__)
 fi
 
 if [ -f "${LEGACY_HOOK}" ] && [ -x "${LEGACY_HOOK}" ]; then
@@ -58,20 +59,22 @@ if [ -f "${LEGACY_HOOK}" ] && [ -x "${LEGACY_HOOK}" ]; then
         rm -f "${STDIN_TEMP}"
         exit ${LEGACY_EXIT}
     fi
-    ${BIN_CMD} review --hook ${EXTRA_ARGS} < "${STDIN_TEMP}"
+    "${BIN_CMD[@]}" review --hook ${EXTRA_ARGS} < "${STDIN_TEMP}"
     EXIT_CODE=$?
     rm -f "${STDIN_TEMP}"
     exit ${EXIT_CODE}
 else
-    exec ${BIN_CMD} review --hook ${EXTRA_ARGS}
+    exec "${BIN_CMD[@]}" review --hook ${EXTRA_ARGS}
 fi
 """
 
 
 def render_hook() -> str:
     """Hook script with the absolute path of this proofpush install baked in as a PATH fallback."""
-    exe = shutil.which("proofpush") or f"{sys.executable} -m proofpush"
-    return HOOK_TEMPLATE.replace("__PROOFPUSH_BIN__", exe)
+    # Quoted bash array: interpreter paths may contain spaces (C:\\Program Files\\...)
+    exe = shutil.which("proofpush")
+    argv = [exe] if exe else [sys.executable, "-m", "proofpush"]
+    return HOOK_TEMPLATE.replace("__PROOFPUSH_BIN__", " ".join(shlex.quote(a.replace("\\", "/")) for a in argv))
 
 
 # Client-side hooks that a global core.hooksPath would otherwise hide from every repo

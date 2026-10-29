@@ -268,8 +268,14 @@ def check(env_name: str):
                 findings.append(RegressionClassifier(TaskResolver(repo_path).resolve(explicit_task=f"Live check {env_name}"))
                                 .classify_workflow(res, res, guard=wf.guard))
 
+    async def run_and_close():
+        try:
+            await run()
+        finally:
+            await engine.close()
+
     try:
-        asyncio.run(run())
+        asyncio.run(run_and_close())
     except Exception as exc:
         findings.append(_blocked("Browser Engine", str(exc).splitlines()[0]))
 
@@ -284,7 +290,7 @@ def check(env_name: str):
         regressions_count=sum(1 for f in failed if f.category == "REGRESSION"),
         not_tested_count=sum(1 for f in failed if f.category == "BLOCKED"), findings=findings,
     )
-    reporter = ReportGenerator(repo_path)
+    reporter = ReportGenerator(repo_path, cfg.report_retention)
     reporter.print_terminal_report(report)
     console.print(f"[dim]Evidence saved:[/dim] [cyan]{reporter.save_reports(report)['html']}[/cyan]")
     sys.exit(1 if failed else 0)
@@ -491,8 +497,14 @@ def _audit_update(
                         findings.append(wf_finding)
 
                 # Run async browser checks
+                async def run_and_close():
+                    try:
+                        await run_browser_audit()
+                    finally:
+                        await browser_engine.close()
+
                 try:
-                    asyncio.run(run_browser_audit())
+                    asyncio.run(run_and_close())
                 except Exception as exc:
                     findings.append(Finding(
                         category="BLOCKED",
@@ -556,7 +568,7 @@ def _audit_update(
     )
 
     # Print and Save
-    reporter = ReportGenerator(repo_path)
+    reporter = ReportGenerator(repo_path, cfg.report_retention)
     reporter.print_terminal_report(report_data)
     saved_paths = reporter.save_reports(report_data)
 

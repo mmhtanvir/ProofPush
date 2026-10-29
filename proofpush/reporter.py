@@ -47,12 +47,27 @@ class AuditReportData:
 
 
 class ReportGenerator:
-    def __init__(self, repo_path: Path):
+    def __init__(self, repo_path: Path, retention: int = 30):
         self.repo_path = repo_path.resolve()
+        self.retention = retention
         self.reports_dir = self.repo_path / ".proofpush" / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         exclude_from_git(self.repo_path)
         self.console = Console(soft_wrap=True)
+
+    def _prune(self) -> None:
+        """Keep the newest `retention` report sets, and screenshots no older than the oldest kept report."""
+        reports = sorted(self.reports_dir.glob("report_*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for old in reports[self.retention:]:
+            for ext in (".json", ".md", ".html"):
+                old.with_suffix(ext).unlink(missing_ok=True)
+        kept = reports[:self.retention]
+        shots = self.reports_dir / "screenshots"
+        if kept and shots.is_dir():
+            cutoff = kept[-1].stat().st_mtime - 60  # screenshots are written just before their report
+            for shot in shots.iterdir():
+                if shot.is_file() and shot.stat().st_mtime < cutoff:
+                    shot.unlink(missing_ok=True)
 
     def print_terminal_report(self, data: AuditReportData) -> None:
         """Render terminal report matching specification."""
@@ -92,13 +107,12 @@ class ReportGenerator:
                     print(f"- {step}")
                 print(f"Recommended action: {r.recommended_action}")
 
-        # Print Unrelated Changes
+        # Unrelated changes: a keyword heuristic, so one summary line here; the full list is in the saved report
         if data.security_result and data.security_result.unrelated_files:
-            for u in data.security_result.unrelated_files[:3]:
-                print("\n" + "-" * 60)
-                print("UNRELATED CHANGE")
-                print(f"File: {u.file_path}")
-                print(f"Reason: {u.reason}")
+            names = [u.file_path for u in data.security_result.unrelated_files]
+            print("\n" + "-" * 60)
+            print(f"NOTE: {len(names)} file(s) not obviously related to the task: {', '.join(names[:3])}"
+                  + (f" (+{len(names) - 3} more)" if len(names) > 3 else ""))
 
         # Print Secrets if found
         if data.security_result and data.security_result.secrets_found:
@@ -126,8 +140,8 @@ class ReportGenerator:
 
     def save_reports(self, data: AuditReportData) -> Dict[str, str]:
         """Save Markdown, JSON, and HTML evidence reports."""
-        ts = int(time.time())
-        base_name = f"report_{ts}"
+        # Nanoseconds: several pushed branches can be audited within one second
+        base_name = f"report_{time.time_ns()}"
 
         json_file = self.reports_dir / f"{base_name}.json"
         md_file = self.reports_dir / f"{base_name}.md"
@@ -171,6 +185,7 @@ class ReportGenerator:
         # Update symlink or pointer to latest
         latest_html = self.reports_dir / "latest.html"
         latest_html.write_text(html_content, encoding="utf-8")
+        self._prune()
 
         return {
             "json": str(json_file),

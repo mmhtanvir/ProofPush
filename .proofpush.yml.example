@@ -123,3 +123,6 @@ policies:
 # Suspicious-push rules
 # push_rules:
 #   disable: [py-obfuscated-payload]
+
+# Keep the newest N report sets in .proofpush/reports (older reports and screenshots are deleted)
+report_retention: 30

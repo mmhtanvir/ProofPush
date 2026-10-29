@@ -7,14 +7,39 @@ network failure monitoring, and safe interactive element inspection.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
 from playwright.async_api import async_playwright, Response, Request
 
 from proofpush.config import AuthConfig, Credentials, WorkflowConfig, WorkflowStep
 from proofpush.utils import redact_secrets, totp
+
+LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+
+
+def retarget_session(saved_session: Path, base_url: str) -> Dict[str, Any]:
+    """Saved browser state, with loopback cookies/storage moved to base_url's host and port.
+
+    Local audits run each version on 127.0.0.1 with a random port, so a session saved against
+    localhost:3000 would otherwise never apply. Non-loopback (prod) sessions are untouched.
+    """
+    state = json.loads(saved_session.read_text(encoding="utf-8"))
+    target = urlparse(base_url)
+    if target.hostname not in LOOPBACK:
+        return state
+    for cookie in state.get("cookies", []):
+        if cookie.get("domain", "").lstrip(".") in LOOPBACK:
+            cookie["domain"] = target.hostname
+    for origin in state.get("origins", []):
+        if urlparse(origin.get("origin", "")).hostname in LOOPBACK:
+            origin["origin"] = f"{target.scheme}://{target.netloc}"
+    return state
+
 
 # Links a crawler must never follow: they end the session or change data even as a GET
 UNSAFE_LINK = re.compile(r"log-?out|sign-?out|logoff|delete|remove|destroy|unsubscribe|deactivate|purge|cancel", re.I)
@@ -76,8 +101,32 @@ class BrowserEngine:
     def __init__(self, headless: bool = True, timeout: int = 15000):
         self.headless = headless
         self.timeout = timeout
+        self._playwright = None
+        self._browser = None
+        self._loop = None
         # Logged-in browser state (cookies, localStorage) per base URL, from login()
         self.sessions: Dict[str, Dict[str, Any]] = {}
+
+    @asynccontextmanager
+    async def _shared_browser(self):
+        """One Chromium for every visit in this event loop; launching per page cost ~1s each."""
+        loop = asyncio.get_running_loop()
+        if self._browser is None or self._loop is not loop or not self._browser.is_connected():
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(headless=self.headless)
+            self._loop = loop
+        yield self._browser
+
+    async def _close_contexts(self, browser) -> None:
+        for ctx in list(browser.contexts):
+            await ctx.close()
+
+    async def close(self) -> None:
+        """Shut the shared browser down; call once at the end of the asyncio.run that used this engine."""
+        if self._browser is not None and self._loop is asyncio.get_running_loop():
+            await self._browser.close()
+            await self._playwright.stop()
+        self._browser = self._playwright = self._loop = None
 
     async def visit_page(
         self,
@@ -95,8 +144,7 @@ class BrowserEngine:
 
         vp = viewport or {"width": 1280, "height": 800}
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self.headless)
+        async with self._shared_browser() as browser:
             context = await browser.new_context(
                 viewport=vp,
                 ignore_https_errors=True,
@@ -203,7 +251,7 @@ class BrowserEngine:
                     """)
                     screenshot = await page.screenshot(full_page=True)
 
-                await browser.close()
+                await context.close()
 
                 is_pass = (status_code < 400) and (len(console_errors) == 0)
                 return PageVisitResult(
@@ -221,7 +269,7 @@ class BrowserEngine:
                 )
 
             except Exception as exc:
-                await browser.close()
+                await context.close()
                 return PageVisitResult(
                     route=route,
                     url=full_url,
@@ -272,14 +320,13 @@ class BrowserEngine:
     async def login(self, base_url: str, auth: AuthConfig, creds: Optional[Credentials],
                     saved_session: Optional[Path] = None, probe_route: str = "/") -> Optional[str]:
         """Log the test account in (or reuse a saved session) and keep it for later visits. Returns an error, or None."""
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self.headless)
+        async with self._shared_browser() as browser:
             try:
                 login_url = f"{base_url.rstrip('/')}{auth.login_path}"
                 # 1. A session saved by `proofpush login` (needed for SMS/email codes, SSO, captchas)
                 if saved_session and saved_session.is_file():
                     context = await browser.new_context(ignore_https_errors=True, user_agent="proofpush-functional-agent",
-                                                        storage_state=str(saved_session))
+                                                        storage_state=retarget_session(saved_session, base_url))
                     page = await context.new_page()
                     # Still valid if a page behind the login doesn't bounce us to a login form
                     await page.goto(f"{base_url.rstrip('/')}{probe_route}", timeout=self.timeout, wait_until="domcontentloaded")
@@ -334,7 +381,7 @@ class BrowserEngine:
                     msg = msg.replace(creds.password, "***")
                 return redact_secrets(msg).splitlines()[0]
             finally:
-                await browser.close()
+                await self._close_contexts(browser)
 
     async def _settle(self, page) -> None:
         try:
@@ -345,10 +392,10 @@ class BrowserEngine:
     async def _on_login_form(self, page) -> bool:
         return await page.locator(f"input[type=password]:visible, {OTP_SELECTOR}").count() > 0
 
-    async def save_session_interactively(self, url: str, out: Path, wait_for_user) -> None:
+    async def save_session_interactively(self, url: str, out: Path, wait_for_user, headless: bool = False) -> None:
         """Open a visible browser at the login page, let the person log in (OTP, SSO...), then save the session."""
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False)
+            browser = await p.chromium.launch(headless=headless)
             context = await browser.new_context(ignore_https_errors=True)
             page = await context.new_page()
             await page.goto(url, timeout=self.timeout)
@@ -385,8 +432,7 @@ class BrowserEngine:
 
         vp = viewport or {"width": 1280, "height": 800}
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self.headless)
+        async with self._shared_browser() as browser:
             context = await browser.new_context(
                 viewport=vp,
                 ignore_https_errors=True,
@@ -417,7 +463,7 @@ class BrowserEngine:
                 await page.goto(initial_url, timeout=self.timeout, wait_until="domcontentloaded")
                 await page.wait_for_timeout(300)
             except Exception as exc:
-                await browser.close()
+                await context.close()
                 return WorkflowExecutionResult(
                     workflow_name=workflow.name,
                     route=workflow.path,
@@ -446,7 +492,7 @@ class BrowserEngine:
                 step_details.append(step_res)
 
             final_url = page.url
-            await browser.close()
+            await context.close()
 
             return WorkflowExecutionResult(
                 workflow_name=workflow.name,

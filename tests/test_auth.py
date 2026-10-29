@@ -77,3 +77,56 @@ class TestAuth(GitRepoTestCase):
             self.assertTrue(NON_PAGE.search(route), route)
         for route in ["/dashboard", "/settings/profile", "/reports/2026"]:
             self.assertFalse(UNSAFE_LINK.search(route) or NON_PAGE.search(route), route)
+
+    def test_scenario_43_saved_session_flow_and_loopback_retarget(self):
+        """Scenario 43: `proofpush login` saves a private session file; local sessions follow the audit's host:port."""
+        import asyncio
+        import json
+        import stat
+        from proofpush.browser_engine import BrowserEngine, retarget_session
+
+        out = self.local_dir / ".proofpush" / "session-local.json"
+        page = self.test_dir / "login.html"
+        page.write_text("<form><input type=password></form>")
+        typed = []
+        engine = BrowserEngine()
+        asyncio.run(engine.save_session_interactively(page.as_uri(), out, lambda: typed.append("enter"), headless=True))
+        self.assertEqual(typed, ["enter"])
+        self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
+        self.assertIn("cookies", json.loads(out.read_text()))
+
+        out.write_text(json.dumps({
+            "cookies": [{"name": "session", "value": "ok", "domain": "localhost", "path": "/"},
+                        {"name": "sso", "value": "x", "domain": ".idp.example.com", "path": "/"}],
+            "origins": [{"origin": "http://localhost:3000", "localStorage": [{"name": "token", "value": "t"}]}],
+        }))
+        local = retarget_session(out, "http://127.0.0.1:41234")
+        self.assertEqual([c["domain"] for c in local["cookies"]], ["127.0.0.1", ".idp.example.com"])
+        self.assertEqual(local["origins"][0]["origin"], "http://127.0.0.1:41234")
+        prod = retarget_session(out, "https://shop.example.com")
+        self.assertEqual(prod["cookies"][0]["domain"], "localhost")
+
+    def test_scenario_44_report_retention_and_hook_quoting(self):
+        """Scenario 44: Old reports are pruned to report_retention; the hook survives interpreter paths with spaces."""
+        import subprocess
+        from proofpush.reporter import AuditReportData, ReportGenerator
+        import proofpush.git_interceptor as gi
+
+        reporter = ReportGenerator(self.local_dir, retention=2)
+        names = []
+        for i in range(4):
+            data = AuditReportData(timestamp="t", repo_path=str(self.local_dir), baseline_sha="a" * 10, proposed_sha="b" * 10,
+                                   task_title=f"run {i}", task_source="explicit", enforcement_mode="advisory",
+                                   decision="ALLOWED", decision_reason="")
+            names.append(Path(reporter.save_reports(data)["json"]).name)
+        self.assertEqual(len(set(names)), 4)  # same-second runs don't overwrite each other
+        left = sorted(f.name for f in reporter.reports_dir.glob("report_*.json"))
+        self.assertEqual(left, sorted(names[-2:]))
+
+        with mock.patch("shutil.which", return_value=None), \
+                mock.patch.object(gi.sys, "executable", "/opt/My Python/bin/python3"):
+            hook = gi.render_hook()
+        self.assertIn("BIN_CMD=('/opt/My Python/bin/python3' -m proofpush)", hook)
+        script = self.test_dir / "hook.sh"
+        script.write_text(hook)
+        self.assertEqual(subprocess.run(["bash", "-n", str(script)]).returncode, 0)
