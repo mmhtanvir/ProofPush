@@ -245,7 +245,7 @@ async def _record_api_call(req, into: Dict[str, Dict[str, Any]]) -> None:
         try:
             call.update(json_shape(await resp.json()))
         except Exception:
-            pass
+            call["no_body"] = True  # body gone (the page moved on first): shape unknown, not empty
     key = api_key(req.method, req.url)
     # Keep the worst outcome if a call repeats on the page
     if key not in into or call["status"] > into[key]["status"]:

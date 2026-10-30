@@ -24,8 +24,8 @@ TRANSIENT_NET_ERROR = re.compile(r"ERR_(BLOCKED_BY_ORB|TIMED_OUT|CONNECTION_(RES
 # CAPTCHA widgets (Turnstile, reCAPTCHA, hCaptcha) probe the browser with requests that fail on purpose
 # (a 401, a decoy hostname) under random URLs, so they never match the baseline's.
 CAPTCHA_HOST = re.compile(r"(^|\.)(challenges\.cloudflare\.com|hcaptcha\.com|recaptcha\.net)$")
-# Messages from the browser itself (GPU driver), not from the page's code.
-BROWSER_NOISE = re.compile(r"GL Driver Message|GPU stall")
+# Messages from the browser itself (GPU driver, font decoder), not from the page's code.
+BROWSER_NOISE = re.compile(r"GL Driver Message|GPU stall|OTS parsing error")
 
 
 def is_third_party_flake(failure, page_url: str) -> bool:
@@ -312,6 +312,9 @@ class RegressionClassifier:
             if b["status"] < 400 <= p["status"]:
                 broken.append(f"{key} now returns {p['status']} (was {b['status']})")
                 continue
+            if b.get("no_body") or p.get("no_body"):
+                p = {"ms": p.get("ms")}  # one side's body couldn't be read: compare speed only
+                b = {"ms": b.get("ms")}
             lost = [k for k in b.get("keys", []) if k not in set(p.get("keys", []))]
             if lost:
                 warn.append(f"{key} no longer returns fields: {', '.join(lost[:6])}")

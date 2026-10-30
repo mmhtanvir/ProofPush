@@ -98,3 +98,13 @@ class TestBackendCalls(GitRepoTestCase):
         star = classifier.classify_interaction("/", clicks_before["id:star"], clicks_after["id:star"])
         self.assertIn("fails on the backend: POST /api/star -> 500", star.after_behavior)
         self.assertTrue(star.is_critical)
+
+    def test_scenario_61_unreadable_body_is_not_lost_fields(self):
+        """Scenario 61: a response whose body was gone before it could be read (the page moved on) says
+        nothing about its fields; only its speed is compared."""
+        classifier = RegressionClassifier(TaskContext(title="Refactor page"))
+        before = {"GET /api/settings": {"status": 200, "ms": 100, "keys": ["language", "date_format"]}}
+        after = {"GET /api/settings": {"status": 200, "ms": 110, "no_body": True}}
+        self.assertIsNone(classifier.classify_api("/", before, after))
+        after["GET /api/settings"]["ms"] = 900
+        self.assertIn("got slower", classifier.classify_api("/", before, after).after_behavior)
