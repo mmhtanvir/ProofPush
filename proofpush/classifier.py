@@ -21,8 +21,17 @@ from proofpush.visual_comparator import VisualComparisonResult
 TRANSIENT_NET_ERROR = re.compile(r"ERR_(BLOCKED_BY_ORB|TIMED_OUT|CONNECTION_(RESET|CLOSED|TIMED_OUT)|NETWORK_CHANGED|INTERNET_DISCONNECTED)")
 
 
+# CAPTCHA widgets (Turnstile, reCAPTCHA, hCaptcha) probe the browser with requests that fail on purpose
+# (a 401, a decoy hostname) under random URLs, so they never match the baseline's.
+CAPTCHA_HOST = re.compile(r"(^|\.)(challenges\.cloudflare\.com|hcaptcha\.com|recaptcha\.net)$")
+# Messages from the browser itself (GPU driver), not from the page's code.
+BROWSER_NOISE = re.compile(r"GL Driver Message|GPU stall")
+
+
 def is_third_party_flake(failure, page_url: str) -> bool:
     host = lambda u: (urlparse(u).hostname or "").lower()
+    if CAPTCHA_HOST.search(host(failure.url)) or "/recaptcha/" in failure.url:
+        return True
     return (failure.status is None and host(failure.url) != host(page_url)
             and bool(TRANSIENT_NET_ERROR.search(failure.error_text or "")))
 
@@ -130,7 +139,8 @@ class RegressionClassifier:
             )
 
         # Case 4: Console errors introduced in proposed version
-        new_console_errors = [e for e in prop_result.console_errors if e not in base_result.console_errors]
+        new_console_errors = [e for e in prop_result.console_errors
+                              if e not in base_result.console_errors and not BROWSER_NOISE.search(e)]
         if new_console_errors:
             return Finding(
                 category="REGRESSION",

@@ -215,3 +215,18 @@ class TestFunctionalRegressions(unittest.TestCase):
                      NetworkFailure(url="https://api.example.com/contacts", method="GET", status=500, error_text="HTTP 500"),
                      NetworkFailure(url="https://cdn.exampel.com/lib.js", method="GET", error_text="net::ERR_NAME_NOT_RESOLVED")]:
             self.assertEqual(self.classifier.classify_route_visit("/contacts", base, with_failure(real)).category, "REGRESSION")
+
+    def test_scenario_91_captcha_probes_and_gpu_messages_are_not_regressions(self):
+        """Scenario 91: Turnstile's own probe requests (a 401, a decoy host) come with random URLs on every run,
+        and the GPU driver logs to the console on its own -- neither is the page's doing."""
+        base = PageVisitResult(route="/signin", url="http://127.0.0.1:3100/signin", status=200, title="Sign in")
+        probes = [NetworkFailure(url="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/pat/a5/179/b8",
+                                 method="GET", status=401, error_text="HTTP 401"),
+                  NetworkFailure(url="https://brunhild.challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/i/a5/Ck",
+                                 method="GET", error_text="net::ERR_NAME_NOT_RESOLVED")]
+        gpu = "[WARNING] [.WebGL-0x1]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+        prop = PageVisitResult(route="/signin", url="http://127.0.0.1:3200/signin", status=200, title="Sign in",
+                               network_failures=probes, console_errors=[gpu])
+        self.assertEqual(self.classifier.classify_route_visit("/signin", base, prop).category, "UNCHANGED")
+        prop.console_errors = ["[ERROR] Uncaught TypeError: x is undefined"]
+        self.assertEqual(self.classifier.classify_route_visit("/signin", base, prop).category, "REGRESSION")
