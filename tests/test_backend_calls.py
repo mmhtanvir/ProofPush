@@ -108,3 +108,6 @@ class TestBackendCalls(GitRepoTestCase):
         self.assertIsNone(classifier.classify_api("/", before, after))
         after["GET /api/settings"]["ms"] = 900
         self.assertIn("got slower", classifier.classify_api("/", before, after).after_behavior)
+        # ...but a live (non-local) API's speed changes on its own, not with the push
+        after["GET /api/settings"]["remote"] = True
+        self.assertIsNone(classifier.classify_api("/", before, after))

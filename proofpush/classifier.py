@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
 
 from proofpush.task_resolver import TaskContext
-from proofpush.browser_engine import InteractionResult, PageVisitResult, WorkflowExecutionResult
+from proofpush.browser_engine import CAPTCHA_HOST, InteractionResult, PageVisitResult, WorkflowExecutionResult
 from proofpush.visual_comparator import VisualComparisonResult
 
 # Browser errors that come from the network or the remote server, not from the page's code: on another host
@@ -21,11 +21,8 @@ from proofpush.visual_comparator import VisualComparisonResult
 TRANSIENT_NET_ERROR = re.compile(r"ERR_(BLOCKED_BY_ORB|TIMED_OUT|CONNECTION_(RESET|CLOSED|TIMED_OUT)|NETWORK_CHANGED|INTERNET_DISCONNECTED)")
 
 
-# CAPTCHA widgets (Turnstile, reCAPTCHA, hCaptcha) probe the browser with requests that fail on purpose
-# (a 401, a decoy hostname) under random URLs, so they never match the baseline's.
-CAPTCHA_HOST = re.compile(r"(^|\.)(challenges\.cloudflare\.com|hcaptcha\.com|recaptcha\.net)$")
-# Messages from the browser itself (GPU driver, font decoder), not from the page's code.
-BROWSER_NOISE = re.compile(r"GL Driver Message|GPU stall|OTS parsing error")
+# The browser refusing to autoplay audio/video: a headless page never gets the user click it needs.
+BROWSER_NOISE = re.compile(r"play\(\).*NotAllowedError")
 
 
 def is_third_party_flake(failure, page_url: str) -> bool:
@@ -313,7 +310,8 @@ class RegressionClassifier:
                 broken.append(f"{key} now returns {p['status']} (was {b['status']})")
                 continue
             if b.get("no_body") or p.get("no_body"):
-                p = {"ms": p.get("ms")}  # one side's body couldn't be read: compare speed only
+                # one side's body couldn't be read: compare speed only
+                p = {"ms": p.get("ms"), "remote": p.get("remote")}
                 b = {"ms": b.get("ms")}
             lost = [k for k in b.get("keys", []) if k not in set(p.get("keys", []))]
             if lost:
@@ -323,7 +321,7 @@ class RegressionClassifier:
             for name, n in b.get("lists", {}).items():
                 if n > 0 and p.get("lists", {}).get(name) == 0:
                     warn.append(f"{key} now returns an empty '{name}' (was {n} items)")
-            if b.get("ms") and p.get("ms") and p["ms"] > max(2 * b["ms"], b["ms"] + 500):
+            if not p.get("remote") and b.get("ms") and p.get("ms") and p["ms"] > max(2 * b["ms"], b["ms"] + 500):
                 warn.append(f"{key} got slower: {b['ms']} ms -> {p['ms']} ms")
         for key, p in prop.items():
             if key not in base and p["status"] >= 500:

@@ -34,6 +34,19 @@ from proofpush.config import AuthConfig, Credentials, WorkflowConfig, WorkflowSt
 from proofpush.utils import redact_secrets, totp
 
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+# CAPTCHA widgets (Turnstile, reCAPTCHA, hCaptcha) probe the browser on purpose: requests that fail (a 401,
+# a decoy hostname) under random URLs, and console noise from inside their own frame.
+CAPTCHA_HOST = re.compile(r"(^|\.)(challenges\.cloudflare\.com|hcaptcha\.com|recaptcha\.net)$")
+
+
+def console_entry(msg) -> Optional[str]:
+    """An error/warning the page logged, as "[TYPE] text"; None for other levels, favicons and CAPTCHA frames."""
+    if msg.type not in ("error", "warning") or "favicon" in msg.text:
+        return None
+    source = (msg.location or {}).get("url") or ""
+    if CAPTCHA_HOST.search(urlparse(source).hostname or "") or "/recaptcha/" in source:
+        return None
+    return f"[{msg.type.upper()}] {msg.text}"
 # Chromium-based browsers a person logs in with (any of them talks CDP), most common first
 _PF = [os.environ.get(v, "") for v in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")]
 BROWSER_CANDIDATES = [
@@ -235,6 +248,8 @@ async def _record_api_call(req, into: Dict[str, Dict[str, Any]]) -> None:
     if req.resource_type == "document" and "json" not in (resp.headers.get("content-type") or ""):
         return  # HTML pages are judged by the page checks; JSON routes (API-only backends) are API calls
     call = {"status": resp.status, "ms": round(req.timing.get("responseEnd", 0) or 0)}
+    if (urlparse(req.url).hostname or "") not in LOOPBACK:
+        call["remote"] = True  # a live API: its speed varies on its own, not with the push
     if req.method == "GET":
         # A concrete, known-good URL the API tests can replay (sensitive query values masked)
         parsed = urlparse(req.url)
@@ -381,8 +396,9 @@ class BrowserEngine:
 
             # Listen to console messages
             def on_console(msg):
-                if msg.type in ("error", "warning") and "favicon" not in msg.text:
-                    console_errors.append(f"[{msg.type.upper()}] {msg.text}")
+                entry = console_entry(msg)
+                if entry:
+                    console_errors.append(entry)
 
             page.on("console", on_console)
 
@@ -871,8 +887,9 @@ class BrowserEngine:
             page = await context.new_page()
 
             def on_console(msg):
-                if msg.type in ("error", "warning"):
-                    console_errors.append(f"[{msg.type.upper()}] {msg.text}")
+                entry = console_entry(msg)
+                if entry:
+                    console_errors.append(entry)
 
             def on_request_failed(req):
                 network_failures.append(

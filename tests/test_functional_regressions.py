@@ -15,9 +15,10 @@ Covers:
 """
 
 import unittest
+from types import SimpleNamespace
 from proofpush.task_resolver import TaskContext
 from proofpush.classifier import RegressionClassifier
-from proofpush.browser_engine import PageVisitResult, WorkflowExecutionResult, NetworkFailure
+from proofpush.browser_engine import PageVisitResult, WorkflowExecutionResult, NetworkFailure, console_entry
 
 
 class TestFunctionalRegressions(unittest.TestCase):
@@ -218,15 +219,23 @@ class TestFunctionalRegressions(unittest.TestCase):
 
     def test_scenario_91_captcha_probes_and_gpu_messages_are_not_regressions(self):
         """Scenario 91: Turnstile's own probe requests (a 401, a decoy host) come with random URLs on every run,
-        and the GPU driver logs to the console on its own -- neither is the page's doing."""
+        its frame logs to the console, and a headless browser blocks autoplay -- none of it is the page's doing."""
         base = PageVisitResult(route="/signin", url="http://127.0.0.1:3100/signin", status=200, title="Sign in")
         probes = [NetworkFailure(url="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/pat/a5/179/b8",
                                  method="GET", status=401, error_text="HTTP 401"),
                   NetworkFailure(url="https://brunhild.challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/i/a5/Ck",
                                  method="GET", error_text="net::ERR_NAME_NOT_RESOLVED")]
-        gpu = "[WARNING] [.WebGL-0x1]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+        autoplay = "[WARNING] [audio] play() rejected: /audio/guide.mpeg NotAllowedError"
         prop = PageVisitResult(route="/signin", url="http://127.0.0.1:3200/signin", status=200, title="Sign in",
-                               network_failures=probes, console_errors=[gpu])
+                               network_failures=probes, console_errors=[autoplay])
         self.assertEqual(self.classifier.classify_route_visit("/signin", base, prop).category, "UNCHANGED")
         prop.console_errors = ["[ERROR] Uncaught TypeError: x is undefined"]
         self.assertEqual(self.classifier.classify_route_visit("/signin", base, prop).category, "REGRESSION")
+
+        def msg(text, url, type_="error"):
+            return SimpleNamespace(type=type_, text=text, location={"url": url})
+        frame = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2"
+        self.assertIsNone(console_entry(msg("Connecting to 'data:,' violates the CSP", frame)))
+        self.assertEqual(console_entry(msg("x is undefined", "http://127.0.0.1:3200/src/App.tsx")),
+                         "[ERROR] x is undefined")
+        self.assertIsNone(console_entry(msg("hello", "http://127.0.0.1:3200/src/App.tsx", "log")))
