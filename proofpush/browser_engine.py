@@ -242,7 +242,10 @@ async def _record_api_call(req, into: Dict[str, Dict[str, Any]]) -> None:
     """Status, time and JSON shape of one finished XHR/fetch call (the page's backend requests)."""
     if req.resource_type not in ("xhr", "fetch", "document"):
         return
-    resp = await req.response()
+    try:
+        resp = await req.response()
+    except Exception:
+        return  # the page closed before this call finished: nothing to record
     if resp is None:
         return
     if req.resource_type == "document" and "json" not in (resp.headers.get("content-type") or ""):
