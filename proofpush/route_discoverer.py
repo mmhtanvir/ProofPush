@@ -7,6 +7,7 @@ Detects added, removed, erroring, and redirected routes.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import List, Set, Dict, Any, Optional
@@ -14,7 +15,19 @@ from typing import List, Set, Dict, Any, Optional
 
 PAGE_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".mdx", ".md"}
 TEST_FILE = re.compile(r"\.(test|spec|stories)\.", re.I)
+# <Route ... path="/x"> (attributes may span lines and come in any order) or { path: "/x" } route objects
+REACT_ROUTE = re.compile(r"""<Route\b(?:(?!<Route\b)[\s\S]){0,400}?\bpath=\{?["'`]([^"'`]+)["'`]|\bpath:\s*["'`]([^"'`]+)["'`]""")
 SKIP_DIRS = {"node_modules", ".venv", "venv", ".git", ".next", "dist", "build", "out", "coverage", "__pycache__", "tests", "test"}
+
+
+def source_files(target_dir: Path, endings: tuple):
+    """Files under target_dir whose name ends with one of endings, never descending into SKIP_DIRS
+    (globbing ** would walk all of node_modules first and filter afterwards)."""
+    for dirpath, dirnames, filenames in os.walk(target_dir):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for name in filenames:
+            if name.endswith(endings):
+                yield Path(dirpath) / name
 
 
 class RouteDiscoverer:
@@ -32,10 +45,15 @@ class RouteDiscoverer:
         if not self.auto_discover:
             return [r for r in sorted(routes) if not self._is_excluded(r)]
 
+        # 0. React Router (<Route path="/x"> or { path: "/x" }): when it routes the app, src/pages is just a
+        # folder of components, not Next.js file routing
+        spa_routes = self.react_router_routes(target_dir)
+        routes.update(spa_routes)
+
         # 1. Next.js App Router (app/**/page.jsx, app/**/page.tsx, etc.)
         app_dir = target_dir / "app"
         src_app = target_dir / "src" / "app"
-        for ad in [app_dir, src_app]:
+        for ad in ([] if spa_routes else [app_dir, src_app]):
             if ad.is_dir():
                 for p in ad.glob("**/page.*"):
                     if p.suffix not in PAGE_EXTENSIONS:
@@ -51,7 +69,7 @@ class RouteDiscoverer:
         # 2. Next.js Pages Router (pages/**/*.jsx, pages/**/*.tsx, etc.)
         pages_dir = target_dir / "pages"
         src_pages = target_dir / "src" / "pages"
-        for pd in [pages_dir, src_pages]:
+        for pd in ([] if spa_routes else [pages_dir, src_pages]):
             if pd.is_dir():
                 for p in pd.glob("**/*.*"):
                     rel = p.relative_to(pd)
@@ -82,26 +100,23 @@ class RouteDiscoverer:
         )
         # Django: path("api/patients/", ...) in urls.py (parameterised <int:pk> routes skipped)
         django_regex = re.compile(r"""\b(?:re_)?path\(\s*r?["']\^?([^"'<(]*?)\$?["']""")
-        for f in target_dir.glob("**/urls.py"):
-            if any(part in SKIP_DIRS for part in f.relative_to(target_dir).parts):
+        for f in source_files(target_dir, ("urls.py",)):
+            if f.name != "urls.py":
                 continue
             for match in django_regex.finditer(f.read_text(encoding="utf-8", errors="ignore")):
                 if match.group(1) and "include" not in match.group(0):
                     routes.add("/" + match.group(1).lstrip("/"))
 
-        for ext in ["*.py", "*.js", "*.ts"]:
-            for f in target_dir.glob(f"**/{ext}"):
-                if any(part in SKIP_DIRS for part in f.relative_to(target_dir).parts):
-                    continue
-                try:
-                    text = f.read_text(encoding="utf-8", errors="ignore")
-                    for match in route_regex.finditer(text):
-                        r = match.group(1)
-                        # Skip dynamic backend parameter routes for basic page audit unless parameterized
-                        if "{" not in r and ":" not in r:
-                            routes.add(r)
-                except Exception:
-                    pass
+        for f in source_files(target_dir, (".py", ".js", ".ts")):
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+                for match in route_regex.finditer(text):
+                    r = match.group(1)
+                    # Skip dynamic backend parameter routes for basic page audit unless parameterized
+                    if "{" not in r and ":" not in r:
+                        routes.add(r)
+            except Exception:
+                pass
 
         # Filter out excluded routes
         filtered = []
@@ -111,6 +126,23 @@ class RouteDiscoverer:
             filtered.append(r)
 
         return filtered
+
+    @staticmethod
+    def react_router_routes(target_dir: Path) -> Set[str]:
+        """Absolute, visitable paths declared in files that import react-router. Nested relative
+        paths, params (:id) and splats (*) are skipped: they have no fixed URL."""
+        found: Set[str] = set()
+        for f in source_files(target_dir, (".jsx", ".tsx", ".js", ".ts")):
+            if TEST_FILE.search(f.name):
+                continue
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            if "react-router" not in text:
+                continue
+            for m in REACT_ROUTE.finditer(text):
+                path = m.group(1) or m.group(2)
+                if path.startswith("/") and ":" not in path and "*" not in path:
+                    found.add(path.rstrip("/") or "/")
+        return found
 
     def _is_excluded(self, route: str) -> bool:
         for exc in self.excluded_routes:

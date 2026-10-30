@@ -83,6 +83,12 @@ proofpush install
 ```
 That's it! Every `git push` (from terminal, VS Code, Cursor, or AI CLI) will now be tested before leaving your machine.
 
+If your site has a login page, `install` (and `doctor`, and each push) tells you the one command that unlocks the pages behind it:
+```bash
+proofpush login --env local
+```
+It starts your app, opens a browser on its login page, and you sign in (email/SMS codes, SSO and captchas all work). From then on every page is checked as that account: each push crawls the whole site (every discovered route plus every page reachable by links, up to `routes.max_pages`), no config edits needed. Set `routes.crawl: false` to check only the listed routes.
+
 ---
 
 ## 💡 What It Does Behind the Scenes
@@ -172,6 +178,8 @@ For prod, run `proofpush check --env prod` after each deploy (CI step) or on a s
 
 ## 🔐 Test Accounts: Check the Whole Site, Locally and in Prod
 
+**Quickest: sign in once.** When ProofPush finds a login page (`/login`, `/signin`, ...) and you haven't signed in, `proofpush install`, `proofpush doctor` and every push print the command to run: `proofpush login --env local`. It starts your app (from `application.start_command`), opens a browser on the login page and saves the session after you sign in. It also remembers the page you landed on, so an expired session is noticed, and it tells you if you pressed Enter before getting past the login. No `auth:` section is needed; add one only to change `login_path` or to give a test account ProofPush can sign in with by itself:
+
 Give ProofPush a test account per environment and it logs in, crawls every page reachable by links, and checks each one, including pages behind the login.
 
 ```yaml
@@ -197,7 +205,7 @@ Put the values in your shell environment or in `.proofpush/secrets.env` (`SHOP_U
 **One-time codes (2FA).** ProofPush never bypasses them:
 - **Authenticator app (TOTP):** when enabling 2FA for the test account, save its setup secret (the text behind the QR code) as `otp_secret_env`. ProofPush generates the current code itself, fully automatic.
 - **SMS / email codes, SSO, captchas:** run `proofpush login --env prod` once. A browser opens, you log in and type the code, and the session is saved to `.proofpush/session-prod.json` (kept out of git). Checks reuse it until it expires, then tell you to log in again.
-  For local, point it at your dev server (`proofpush login --env local --url http://localhost:3000`); the session follows the audit to whatever port it runs each version on.
+  For local, `proofpush login --env local` starts the app itself (or pass `--url http://localhost:3000` for a dev server you already run); the session follows the audit to whatever port it runs each version on.
 
 **CAPTCHAs (Cloudflare Turnstile, reCAPTCHA, hCaptcha).** ProofPush never solves them. When one blocks the login it says so, and how to get through:
 - **Local:** run the app with the provider's official always-pass test keys through `application.env` (e.g. Turnstile site key `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA`). The backend that verifies the token must use the test secret too.
@@ -537,7 +545,8 @@ application:
   port: 3000
   health_check: "/"
 
-# Key routes to audit
+# Key routes to audit. Pages are also discovered from source: Next.js app/ and pages/,
+# React Router (<Route path="/x">, { path: "/x" }), static HTML, and GET backend routes.
 routes:
   base_routes:
     - "/"
@@ -639,7 +648,8 @@ application:
 | `proofpush gate --base <live> --candidate <new>` | Deployment gate: exit 1 rejects a release that brings back fixed bugs (`--vercel` for Vercel's Ignored Build Step) |
 | `proofpush api discover [--url URL]` | Lists discovered API endpoints, their source and confidence |
 | `proofpush check --env prod` | Logs in with the prod test account and checks every reachable page of the live site (read-only) |
-| `proofpush login --env prod` | Log in by hand once (SMS/email codes, SSO) and save the session for checks |
+| `proofpush login --env local` | Starts your app and lets you sign in by hand once (email/SMS codes, SSO, captchas); every page is then checked as that account |
+| `proofpush login --env prod` | Same for the live site (`environments.prod`) |
 | `proofpush review --history-only` | Git-only checks (reverted past fixes, secrets), no app or browser |
 | `proofpush baseline capture` | Saves a verified baseline snapshot of your current commit |
 | `proofpush report --open` | Opens the interactive HTML evidence viewer in your browser |

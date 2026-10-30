@@ -4,6 +4,8 @@ Covers:
 - Scenario 40: Authenticator-app codes match RFC 6238
 - Scenario 41: Credentials come from env vars or .proofpush/secrets.env (kept out of git), never from .proofpush.yml
 - Scenario 42: The crawler never follows logout/delete links or downloads
+- Scenario 86: Sites with a login page name the exact `proofpush login` command; a saved session alone enables signed-in checks
+- Scenario 87: `proofpush login` reports whether the person got past the login form
 """
 
 import base64
@@ -155,3 +157,48 @@ class TestAuth(GitRepoTestCase):
         self.assertIn("1x00000000000000000000AA", asyncio.run(advice_for('<div class="cf-turnstile"></div>')))
         self.assertIn("hCaptcha", asyncio.run(advice_for('<div class="h-captcha"></div>')))
         self.assertIsNone(asyncio.run(advice_for("<form><input type=password></form>")))
+
+    def test_scenario_86_login_hint_and_session_only_auth(self):
+        """Scenario 86: a site with a login page tells you the exact `proofpush login` command; once a session is
+        saved, pages are checked as that account with no config edit, probing the page the login landed on."""
+        from proofpush.config import AuthConfig, effective_auth, landing_file, login_hint, probe_route, session_file
+        app = self.local_dir / "src" / "App.tsx"
+        app.parent.mkdir(parents=True)
+        app.write_text('import { Route } from "react-router-dom";\n<Route path="/" /><Route path="/login" /><Route path="/todo" />\n')
+        cfg = load_config(self.local_dir)
+
+        self.assertIsNone(cfg.routes.crawl)  # unset: audits crawl the whole site once signed in
+        hint = login_hint(self.local_dir, cfg)
+        self.assertIn("`proofpush login --env local`", hint)
+        self.assertIn("/login", hint)
+        self.assertIsNone(effective_auth(self.local_dir, cfg, "local"))
+        self.assertIn("proofpush login --env local", resolve_account(self.local_dir, AuthConfig(), "local")[1])
+
+        saved = session_file(self.local_dir, "local")
+        saved.parent.mkdir(exist_ok=True)
+        saved.write_text('{"cookies": [], "origins": []}')
+        landing_file(self.local_dir, "local").write_text("/todo")
+        self.assertIsNone(login_hint(self.local_dir, cfg))
+        self.assertEqual(effective_auth(self.local_dir, cfg, "local").login_path, "/login")
+        self.assertEqual(probe_route(self.local_dir, cfg, "local"), "/todo")
+        landing_file(self.local_dir, "local").unlink()
+        cfg.routes.base_routes = ["/calendar"]
+        self.assertEqual(probe_route(self.local_dir, cfg, "local"), "/calendar")
+
+        # No login page anywhere: nothing to suggest
+        app.write_text('import { Route } from "react-router-dom";\n<Route path="/" />\n')
+        saved.unlink()
+        self.assertIsNone(login_hint(self.local_dir, load_config(self.local_dir)))
+
+    def test_scenario_87_interactive_login_reports_where_it_landed(self):
+        """Scenario 87: `proofpush login` knows whether the person really got past the login form."""
+        import asyncio
+        from proofpush.browser_engine import BrowserEngine
+        out = self.local_dir / ".proofpush" / "session-local.json"
+        form, inside = self.test_dir / "login.html", self.test_dir / "home.html"
+        form.write_text("<form><input type=password></form>")
+        inside.write_text("<h1>Dashboard</h1>")
+        engine = BrowserEngine()
+        self.assertIsNone(asyncio.run(engine.save_session_interactively(form.as_uri(), out, lambda: None, headless=True)))
+        self.assertEqual(asyncio.run(engine.save_session_interactively(inside.as_uri(), out, lambda: None, headless=True)),
+                         inside.as_posix() if os.name != "nt" else inside.as_uri().split("file://")[1])

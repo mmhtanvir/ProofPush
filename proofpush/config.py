@@ -6,6 +6,7 @@ Loads .proofpush.yml / .proofpush.yaml or falls back to sane defaults.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,7 +90,9 @@ class RoutesConfig:
     auto_discover: bool = True
     base_routes: List[str] = field(default_factory=lambda: ["/"])
     excluded_routes: List[str] = field(default_factory=list)
-    crawl: bool = False  # follow links to check every reachable page, not just base/source routes
+    # Follow links to check every reachable page, not just base/source routes. Unset: on when signed in
+    # (test account or `proofpush login` session), so the whole site behind the login is checked
+    crawl: Optional[bool] = None
     max_pages: int = 50
 
 
@@ -261,11 +264,61 @@ def session_file(repo_path: Path, env_name: str) -> Path:
     return repo_path / ".proofpush" / f"session-{env_name}.json"
 
 
+LOGIN_ROUTE = re.compile(r"^/(?:auth/|account/|user/)?(?:log-?in|sign-?in)$", re.I)
+
+
+def login_command(env_name: str) -> str:
+    return f"proofpush login --env {env_name}"
+
+
+def login_path_for(repo_path: Path, cfg: "AuditorConfig") -> Optional[str]:
+    """auth.login_path, else a login page found in the source; None when the site has no login."""
+    if cfg.auth:
+        return cfg.auth.login_path
+    from proofpush.route_discoverer import RouteDiscoverer
+    routes = RouteDiscoverer(repo_path, cfg.routes.base_routes, auto_discover=True).discover_source_routes()
+    return next((r for r in routes if LOGIN_ROUTE.match(r)), None)
+
+
+def effective_auth(repo_path: Path, cfg: "AuditorConfig", env_name: str) -> Optional[AuthConfig]:
+    """cfg.auth, or a default one once `proofpush login` has saved a session: logging in needs no config edit."""
+    if cfg.auth or not session_file(repo_path, env_name).is_file():
+        return cfg.auth
+    return AuthConfig(login_path=login_path_for(repo_path, cfg) or "/login")
+
+
+def landing_file(repo_path: Path, env_name: str) -> Path:
+    """Page `proofpush login` ended on (behind the login), used to tell a live session from an expired one."""
+    return session_file(repo_path, env_name).with_suffix(".landing")
+
+
+def probe_route(repo_path: Path, cfg: "AuditorConfig", env_name: str) -> str:
+    """Page that shows a login form when the session is gone: where `proofpush login` landed, else the first route."""
+    landing = landing_file(repo_path, env_name)
+    landed = landing.read_text().strip() if landing.is_file() else ""
+    return landed or (cfg.routes.base_routes or ["/"])[0]
+
+
+def login_hint(repo_path: Path, cfg: "AuditorConfig", env_name: str = "local") -> Optional[str]:
+    """What to run so pages behind the login get checked, or None (nothing to do / no login page)."""
+    if session_file(repo_path, env_name).is_file():
+        return None
+    if cfg.auth and resolve_account(repo_path, cfg.auth, env_name)[0]:
+        return None
+    path = login_path_for(repo_path, cfg)
+    if not path:
+        return None
+    return (f"Pages behind the login ({path}) aren't checked yet. Run `{login_command(env_name)}` once: a browser opens "
+            f"on your app, you sign in (one-time codes, SSO and captchas work), and every page is checked as that account "
+            f"from then on.")
+
+
 def resolve_account(repo_path: Path, auth: AuthConfig, env_name: str) -> Tuple[Optional[Credentials], str]:
     """(credentials, "") for the environment's test account, or (None, what to set)."""
     acc = auth.accounts.get(env_name)
     if not acc or not acc.username_env or not acc.password_env:
-        return None, f"auth.accounts.{env_name} needs username_env and password_env in .proofpush.yml"
+        return None, (f"Not signed in: run `{login_command(env_name)}` once to sign in by hand, or give a test "
+                      f"account with auth.accounts.{env_name} (username_env, password_env) in .proofpush.yml")
 
     def lookup(name: str) -> Optional[str]:
         return secret_value(repo_path, name)
@@ -344,7 +397,8 @@ def load_config(repo_path: Optional[Path] = None) -> AuditorConfig:
         config.routes.auto_discover = r.get("auto_discover", config.routes.auto_discover)
         config.routes.base_routes = r.get("base_routes", config.routes.base_routes)
         config.routes.excluded_routes = r.get("excluded_routes", config.routes.excluded_routes)
-        config.routes.crawl = bool(r.get("crawl", config.routes.crawl))
+        if "crawl" in r:
+            config.routes.crawl = bool(r["crawl"])
         config.routes.max_pages = int(r.get("max_pages", config.routes.max_pages))
 
     if "workflows" in raw and isinstance(raw["workflows"], list):

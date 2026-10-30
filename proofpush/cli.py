@@ -19,7 +19,8 @@ from rich.console import Console
 from rich.table import Table
 
 from proofpush import __version__
-from proofpush.config import load_config, resolve_account, resolve_headers, session_file, AuditorConfig
+from proofpush.config import (load_config, resolve_account, resolve_headers, session_file, AuditorConfig,
+                              effective_auth, landing_file, login_command, login_hint, login_path_for, probe_route)
 from proofpush.git_interceptor import GitInterceptor, PushRefUpdate
 from proofpush.task_resolver import TaskResolver
 from proofpush.baseline_manager import BaselineManager, BaselineMetadata
@@ -95,6 +96,11 @@ def install(global_mode: bool, skip_deps: bool):
         console.print(f"  Path: [dim]{res.get('path')}[/dim]")
         if res.get("preserved_legacy"):
             console.print("  [cyan]Notice:[/cyan] Existing pre-push hook preserved as pre-push.legacy and chained.")
+        if not global_mode:
+            hint = login_hint(Path.cwd().resolve(), load_config(Path.cwd().resolve()))
+            if hint:
+                console.print(f"\n[bold yellow]Next step:[/bold yellow] {hint}", markup=True, highlight=False)
+                console.print(f"  [cyan]{login_command('local')}[/cyan]")
     else:
         err = res.get("error", "Unknown error")
         console.print(f"[bold red]✘ Failed to install hook:[/bold red] {err}\n")
@@ -411,15 +417,16 @@ def gate(base_sha, candidate_sha, base_url, candidate_url, env_name, vercel):
 
         async def compare():
             nonlocal pages
-            if cfg.auth:
-                creds, why = resolve_account(repo_path, cfg.auth, env_name)
+            auth = effective_auth(repo_path, cfg, env_name)
+            if auth:
+                creds, why = resolve_account(repo_path, auth, env_name)
                 saved = session_file(repo_path, env_name)
                 if not creds and not saved.is_file():
                     findings.append(_blocked(f"Test account ({env_name})", why))
                     return
-                probe = (cfg.routes.base_routes or ["/"])[0]
-                live_err = await engine.login(base_url, cfg.auth, creds, saved, probe)
-                cand_err = await engine.login(candidate_url, cfg.auth, creds, saved, probe)
+                probe = probe_route(repo_path, cfg, env_name)
+                live_err = await engine.login(base_url, auth, creds, saved, probe)
+                cand_err = await engine.login(candidate_url, auth, creds, saved, probe)
                 if cand_err and not live_err:
                     findings.append(Finding(category="REGRESSION", target="Login (test account)",
                                             before_behavior="Logs in on the live site", after_behavior=cand_err,
@@ -607,13 +614,14 @@ def check(env_name: str):
 
     async def run():
         nonlocal pages
-        if cfg.auth:
-            creds, problem = resolve_account(repo_path, cfg.auth, env_name)
+        auth = effective_auth(repo_path, cfg, env_name)
+        if auth:
+            creds, problem = resolve_account(repo_path, auth, env_name)
             saved = session_file(repo_path, env_name)
             if not creds and not saved.is_file():
                 findings.append(_blocked(f"Test account ({env_name})", problem))
                 return
-            err = await engine.login(base_url, cfg.auth, creds, saved, (cfg.routes.base_routes or ["/"])[0])
+            err = await engine.login(base_url, auth, creds, saved, probe_route(repo_path, cfg, env_name))
             if err:
                 findings.append(Finding(
                     category="REGRESSION", target=f"Login ({env_name})", before_behavior="",
@@ -685,23 +693,45 @@ def check(env_name: str):
 
 @main.command()
 @click.option("--env", "env_name", default="prod", help="Environment to save a session for")
-@click.option("--url", default=None, help="Site URL (defaults to environments.<env> in .proofpush.yml)")
+@click.option("--url", default=None, help="Site URL (defaults to environments.<env>; for local, ProofPush starts the app itself)")
 def login(env_name: str, url: Optional[str]):
     """Log in by hand once (for SMS/email codes, SSO, captchas) and save the session for checks to reuse."""
     repo_path = Path.cwd().resolve()
     cfg = load_config(repo_path)
     base = url or cfg.environments.get(env_name)
+    env_mgr = None
+    if not base and env_name == "local":
+        # Same app the audits start (application.start_command), from the last commit
+        console.print("Starting your app...")
+        env_mgr = EnvironmentManager(repo_path, cfg.application)
+        app = env_mgr.launch_environment("HEAD", label="login")
+        if not app.is_ready or not app.frontend:
+            env_mgr.cleanup()
+            console.print(f"[red]Couldn't start the app: {app.startup_error or 'no application.start_command'}. "
+                          "Start it yourself and pass its address: proofpush login --env local --url http://localhost:3000[/red]")
+            sys.exit(1)
+        base = app.frontend.base_url
     if not base:
         console.print(f"[red]Pass --url or add environments.{env_name} to .proofpush.yml[/red]")
         sys.exit(2)
     out = session_file(repo_path, env_name)
-    login_path = cfg.auth.login_path if cfg.auth else "/login"
-    console.print(f"A browser window is opening at {base.rstrip('/')}{login_path}. Log in with the test account "
-                  "(including any one-time code), then come back here.", markup=False)
-    asyncio.run(BrowserEngine().save_session_interactively(
-        f"{base.rstrip('/')}{login_path}", out, lambda: input("Press Enter once you are logged in... ")))
+    login_path = login_path_for(repo_path, cfg) or "/login"
+    console.print(f"A browser window is opening at {base.rstrip('/')}{login_path}. Log in (including any one-time code), "
+                  "wait until you're past the login page, then come back here.", markup=False)
+    try:
+        landed = asyncio.run(BrowserEngine().save_session_interactively(
+            f"{base.rstrip('/')}{login_path}", out, lambda: input("Press Enter once you are logged in... ")))
+    finally:
+        if env_mgr:
+            env_mgr.cleanup()
     exclude_from_git(repo_path)
-    console.print(f"[green]✔ Session saved to {out} (kept out of git). Checks reuse it until it expires.[/green]")
+    if not landed:
+        console.print(f"[yellow]The browser was still on the login page, so the saved session probably isn't signed in. "
+                      f"Run `{login_command(env_name)}` again and press Enter only after you're in.[/yellow]")
+        sys.exit(1)
+    landing_file(repo_path, env_name).write_text(landed)
+    console.print(f"[green]✔ Session saved to {out} (kept out of git). Every page is now checked as this account, "
+                  f"until the session expires.[/green]")
 
 
 def _audit_update(
@@ -813,7 +843,8 @@ def _audit_update(
                 prop_routes = route_discoverer.discover_source_routes(prop_env.worktree_path)
                 all_routes = sorted(list(set(base_routes) | set(prop_routes)))
 
-                if cfg.audit_level == "quick" and not cfg.routes.crawl and len(all_routes) > 5:
+                crawl = cfg.routes.crawl if cfg.routes.crawl is not None else effective_auth(repo_path, cfg, "local") is not None
+                if cfg.audit_level == "quick" and not crawl and len(all_routes) > 5:
                     # Routes you listed are always checked; quick audits cap only the discovered extras (root and
                     # task-related first), never duplicating a route
                     listed = [r for r in cfg.routes.base_routes if r in all_routes]
@@ -838,15 +869,24 @@ def _audit_update(
                     nonlocal routes_checked_count, workflows_checked_count
                     routes = all_routes
                     # Log the local test account into both versions so pages behind login get checked too
-                    if cfg.auth:
-                        creds, problem = resolve_account(repo_path, cfg.auth, "local")
+                    auth = effective_auth(repo_path, cfg, "local")
+                    hint = None if auth else login_hint(repo_path, cfg)
+                    if hint:
+                        console.print(f"[proofpush] NOTE: {hint}", markup=False)
+                        findings.append(Finding(
+                            category="NOTICE", target="Pages behind the login", before_behavior="", after_behavior=hint,
+                            expected_behavior="Signed-in pages checked too", actual_result="not signed in", confidence=1.0,
+                            recommended_action=f"Run `{login_command('local')}` once.",
+                        ))
+                    if auth:
+                        creds, problem = resolve_account(repo_path, auth, "local")
                         saved = session_file(repo_path, "local")
-                        probe = (cfg.routes.base_routes or ["/"])[0]
+                        probe = probe_route(repo_path, cfg, "local")
                         if not creds and not saved.is_file():
                             findings.append(_blocked("Test account (local)", problem))
                         else:
-                            base_err = await browser_engine.login(base_url_b, cfg.auth, creds, saved, probe)
-                            prop_err = await browser_engine.login(base_url_p, cfg.auth, creds, saved, probe)
+                            base_err = await browser_engine.login(base_url_b, auth, creds, saved, probe)
+                            prop_err = await browser_engine.login(base_url_p, auth, creds, saved, probe)
                             if prop_err and not base_err:
                                 findings.append(Finding(
                                     category="REGRESSION", target="Login (test account)",
@@ -867,12 +907,15 @@ def _audit_update(
                     first = viewports[0] if viewports else None
                     crawled_b: dict = {}
                     crawled_p: dict = {}
-                    if cfg.routes.crawl:
+                    if crawl:
                         # The crawl's own visits (first viewport, with screenshots) are reused below, not repeated
-                        for url, into in ((base_url_p, crawled_p), (base_url_b, crawled_b)):
-                            for v in await browser_engine.crawl(url, all_routes, cfg.routes.max_pages, route_discoverer._is_excluded,
-                                                                capture_screenshot=shots, viewport=size(first), mask_selectors=masks):
-                                into[v.route] = v
+                        # Both versions at once: each loads under the same conditions, and it halves the wait
+                        prop_visits, base_visits = await asyncio.gather(*(
+                            browser_engine.crawl(url, all_routes, cfg.routes.max_pages, route_discoverer._is_excluded,
+                                                 capture_screenshot=shots, viewport=size(first), mask_selectors=masks)
+                            for url in (base_url_p, base_url_b)))
+                        crawled_p.update((v.route, v) for v in prop_visits)
+                        crawled_b.update((v.route, v) for v in base_visits)
                         routes = list(dict.fromkeys([*crawled_p, *crawled_b]))[: cfg.routes.max_pages]
 
                     async def visit(url, route, vp, screenshot=None):
@@ -909,8 +952,8 @@ def _audit_update(
                             if vp is first:
                                 before, after = base_visit, prop_visit
                             else:
-                                before = await visit(base_url_b, r, vp, screenshot=shots and full_shots)
-                                after = await visit(base_url_p, r, vp, screenshot=shots and full_shots)
+                                before, after = await asyncio.gather(visit(base_url_b, r, vp, screenshot=shots and full_shots),
+                                                                     visit(base_url_p, r, vp, screenshot=shots and full_shots))
                                 vis_res = compare(r, before, after, vp)
                                 if vis_res and not vis_res.passed:
                                     findings.append(classifier.classify_route_visit(
@@ -926,8 +969,8 @@ def _audit_update(
                             if layout_finding:
                                 # Confirm with a fresh measurement of both versions: animated or rotating content
                                 # (carousels, typing effects) differs between loads without anything being broken
-                                again_b = await visit(base_url_b, r, vp, screenshot=False)
-                                again_p = await visit(base_url_p, r, vp, screenshot=False)
+                                again_b, again_p = await asyncio.gather(visit(base_url_b, r, vp, screenshot=False),
+                                                                        visit(base_url_p, r, vp, screenshot=False))
                                 layout_finding = classifier.classify_layout(at(r, vp), again_b.layout, again_p.layout) and layout_finding
                             if layout_finding:
                                 findings.append(layout_finding)

@@ -13,7 +13,7 @@ from proofpush.utils import run_command
 from proofpush.git_interceptor import GitInterceptor
 from datetime import datetime
 
-from proofpush.config import find_config_file, load_config, resolve_account, secret_value, session_file
+from proofpush.config import find_config_file, load_config, login_hint, resolve_account, secret_value, session_file
 from proofpush.baseline_manager import BaselineManager
 
 
@@ -109,6 +109,17 @@ class Doctor:
                 if saved.is_file():
                     detail += f"; saved session from {datetime.fromtimestamp(saved.stat().st_mtime):%Y-%m-%d}"
                 checks.append({"name": f"Test Account ({env_name})", "passed": bool(creds) or saved.is_file(), "detail": detail})
+
+        # 7b. Pages behind a login: signed in by hand (`proofpush login`) or still to do
+        if in_repo and "local" not in (cfg.auth.accounts if cfg.auth else {}):
+            saved = session_file(self.repo_path, "local")
+            hint = login_hint(self.repo_path, cfg)
+            if saved.is_file():
+                checks.append({"name": "Login (local)", "passed": True,
+                               "detail": f"signed in with `proofpush login` on {datetime.fromtimestamp(saved.stat().st_mtime):%Y-%m-%d}; "
+                                         f"pages behind the login are checked"})
+            elif hint:
+                checks.append({"name": "Login (local)", "passed": False, "detail": hint})
 
         # 8. Live environments and alerts
         for env_name, url in cfg.environments.items():

@@ -11,6 +11,7 @@ Covers:
 - Scenario 16: Failed browser test
 - Scenario 17: Intentionally changed workflow (EXPECTED_CHANGE)
 - Scenario 31: Guard workflow for a previously fixed bug fails (REGRESSION even if baseline failed)
+- Scenario 90: Third-party network flakes (ORB blocks, timeouts on other hosts) are not blamed on the push
 """
 
 import unittest
@@ -196,3 +197,21 @@ class TestFunctionalRegressions(unittest.TestCase):
         self.assertEqual(finding.category, "REGRESSION")
         self.assertTrue(finding.is_critical)
         self.assertIn("Previously fixed bug reappeared", finding.actual_result)
+
+    def test_scenario_90_third_party_network_flakes_are_not_regressions(self):
+        """Scenario 90: an image on another host blocked by the browser or timing out (network, not code) is not
+        blamed on the push; failures on the app's own host, HTTP errors and misspelled domains still are."""
+        base = PageVisitResult(route="/contacts", url="http://127.0.0.1:3100/contacts", status=200, title="Contacts")
+
+        def with_failure(f):
+            return PageVisitResult(route="/contacts", url="http://127.0.0.1:3200/contacts", status=200, title="Contacts",
+                                   network_failures=[f])
+
+        avatar = "https://lh3.googleusercontent.com/contacts/abc=s100"
+        for flaky in [NetworkFailure(url=avatar, method="GET", error_text="net::ERR_BLOCKED_BY_ORB"),
+                      NetworkFailure(url="https://fonts.gstatic.com/x.woff2", method="GET", error_text="net::ERR_TIMED_OUT")]:
+            self.assertEqual(self.classifier.classify_route_visit("/contacts", base, with_failure(flaky)).category, "UNCHANGED")
+        for real in [NetworkFailure(url="http://127.0.0.1:3200/assets/app.js", method="GET", error_text="net::ERR_TIMED_OUT"),
+                     NetworkFailure(url="https://api.example.com/contacts", method="GET", status=500, error_text="HTTP 500"),
+                     NetworkFailure(url="https://cdn.exampel.com/lib.js", method="GET", error_text="net::ERR_NAME_NOT_RESOLVED")]:
+            self.assertEqual(self.classifier.classify_route_visit("/contacts", base, with_failure(real)).category, "REGRESSION")

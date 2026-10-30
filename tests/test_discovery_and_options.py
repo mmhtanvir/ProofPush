@@ -5,6 +5,8 @@ Covers:
 - Scenario 54: routes.auto_discover: false checks only the listed routes
 - Scenario 55: security.fail_on_secret / fail_on_unrelated actually change the decision
 - Scenario 56: Screenshots honour viewports and paint over visual.excluded_selectors
+- Scenario 88: React Router routes (JSX and route objects) replace Next.js file routing for src/pages
+- Scenario 89: Pages are checked after their data loads (spinners, aria-busy, "Loading..." text), within a cap
 """
 
 import asyncio
@@ -91,3 +93,43 @@ class TestDiscoveryAndOptions(GitRepoTestCase):
         self.addCleanup(server.shutdown)
         with urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/", timeout=5) as r:
             self.assertIn(b"ok", r.read())
+
+    def test_scenario_88_react_router_routes(self):
+        """Scenario 88: React Router routes are discovered (JSX in any attribute order, route objects); params,
+        splats and relative children are skipped, and src/pages is no longer read as Next.js file routing."""
+        self.touch("src/App.tsx", '''import { Routes, Route } from "react-router-dom";
+<Routes>
+  <Route path="/" element={<Home />} />
+  <Route
+    element={<Settings />}
+    path="/settings/"
+  />
+  <Route element={<Layout />}>
+    <Route path="/todo" element={<Todo />} />
+    <Route path="archived" element={<A />} />
+  </Route>
+  <Route path="/share/:token" element={<S />} />
+  <Route path="*" element={<NotFound />} />
+</Routes>''')
+        self.touch("src/router.ts", 'import { createBrowserRouter } from "react-router";\nexport default createBrowserRouter([{ path: "/billing" }]);')
+        self.touch("src/config.ts", 'export const x = { path: "/not-a-route" };')
+        self.touch("src/pages/Todo.tsx")
+        routes = RouteDiscoverer(self.local_dir).discover_source_routes()
+        self.assertEqual(sorted(routes), ["/", "/billing", "/settings", "/todo"])
+
+    def test_scenario_89_pages_are_checked_after_their_data_loads(self):
+        """Scenario 89: a page that shows "Loading..." while it fetches is checked once its content is there."""
+        from proofpush.browser_engine import BrowserEngine
+        page = self.test_dir / "slow.html"
+        page.write_text('<body><p id="m">Loading content...</p><script>'
+                        'setTimeout(() => { document.getElementById("m").textContent = "3 tasks due today"; }, 1500)'
+                        '</script></body>')
+
+        async def visit():
+            engine = BrowserEngine()
+            try:
+                return await engine.visit_page(page.as_uri().rsplit("/", 1)[0], "/slow.html", discover_elements=False, capture_screenshot=False)
+            finally:
+                await engine.close()
+
+        self.assertIn("3 tasks due today", asyncio.run(visit()).dom_text_snippet)

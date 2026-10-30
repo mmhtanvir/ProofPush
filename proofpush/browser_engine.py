@@ -236,6 +236,18 @@ _LOAD_METRICS_JS = r"""(() => {
 
 # Responsive layout health at the current viewport: sideways scroll, off-screen / overlapping / tiny controls,
 # clipped text, which controls are visible, and load metrics
+# True while the page still shows it is loading: a visible spinner/skeleton/progressbar, aria-busy,
+# or "Loading..." text. Data pages behind a login fetch after the HTML arrives.
+_STILL_LOADING_JS = r"""() => {
+  const shown = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const busy = '[aria-busy="true"], [role="progressbar"], .animate-spin, .spinner, .loading, .skeleton';
+  if ([...document.querySelectorAll(busy)].some(shown)) return true;
+  return /\bloading\b[^\n]{0,20}(\.\.\.|…)/i.test(document.body ? document.body.innerText.slice(0, 5000) : '');
+}"""
+CRAWL_CONCURRENCY = 4  # pages loaded at once while crawling
+LOAD_WAIT_MS = 8000  # most a page waits for its loading indicators to go away
+NETWORK_QUIET_MS = 2000  # then for the network to go quiet (pages that poll never do)
+
 _LAYOUT_JS = r"""() => {
   const vw = document.documentElement.clientWidth;
   const docW = Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
@@ -277,6 +289,8 @@ class BrowserEngine:
         self._playwright = None
         self._browser = None
         self._loop = None
+        self._launch_lock: Optional[asyncio.Lock] = None
+        self._lock_loop = None
         # Logged-in browser state (cookies, localStorage) per base URL, from login()
         self.sessions: Dict[str, Dict[str, Any]] = {}
         # Sent with every request (e.g. an API token for backends without a login page)
@@ -286,15 +300,18 @@ class BrowserEngine:
     async def _shared_browser(self):
         """One Chromium for every visit in this event loop; launching per page cost ~1s each."""
         loop = asyncio.get_running_loop()
-        if self._browser is None or self._loop is not loop or not self._browser.is_connected():
-            self._playwright = await async_playwright().start()
-            try:
-                self._browser = await self._playwright.chromium.launch(headless=self.headless)
-            except Exception:
-                await self._playwright.stop()  # otherwise the driver process outlives the event loop
-                self._playwright = None
-                raise
-            self._loop = loop
+        if self._lock_loop is not loop:  # an asyncio.Lock belongs to one event loop
+            self._launch_lock, self._lock_loop = asyncio.Lock(), loop
+        async with self._launch_lock:  # concurrent visits share one launch
+            if self._browser is None or self._loop is not loop or not self._browser.is_connected():
+                self._playwright = await async_playwright().start()
+                try:
+                    self._browser = await self._playwright.chromium.launch(headless=self.headless)
+                except Exception:
+                    await self._playwright.stop()  # otherwise the driver process outlives the event loop
+                    self._playwright = None
+                    raise
+                self._loop = loop
         yield self._browser
 
     async def _close_contexts(self, browser) -> None:
@@ -380,8 +397,7 @@ class BrowserEngine:
                 if resp:
                     status_code = resp.status
 
-                # Wait short delay for client hydration / dynamic rendering
-                await page.wait_for_timeout(400)
+                await self._wait_until_loaded(page)
                 try:
                     layout = await page.evaluate(_LAYOUT_JS)
                 except Exception:
@@ -531,7 +547,8 @@ class BrowserEngine:
                         self.sessions[base_url] = await context.storage_state()
                         return None
                     if not creds:
-                        return f"Saved session {saved_session.name} has expired; run `proofpush login` again"
+                        env_name = saved_session.stem.removeprefix("session-")
+                        return f"Saved session {saved_session.name} has expired; run `proofpush login --env {env_name}` again"
                 if not creds:
                     return "No test account credentials or saved session"
 
@@ -602,11 +619,23 @@ class BrowserEngine:
         except Exception:
             pass
 
+    async def _wait_until_loaded(self, page) -> None:
+        """Let client rendering and data requests finish: loading indicators gone, then the network briefly quiet.
+        Both are capped; a page that never settles is still checked as it is."""
+        await page.wait_for_timeout(400)  # hydration
+        for wait in (lambda: page.wait_for_function(f"() => !({_STILL_LOADING_JS})()", timeout=LOAD_WAIT_MS, polling=200),
+                     lambda: page.wait_for_load_state("networkidle", timeout=NETWORK_QUIET_MS)):
+            try:
+                await wait()
+            except Exception:
+                pass
+
     async def _on_login_form(self, page) -> bool:
         return await page.locator(f"input[type=password]:visible, {OTP_SELECTOR}").count() > 0
 
-    async def save_session_interactively(self, url: str, out: Path, wait_for_user, headless: bool = False) -> None:
-        """Open a visible browser at the login page, let the person log in (OTP, SSO...), then save the session."""
+    async def save_session_interactively(self, url: str, out: Path, wait_for_user, headless: bool = False) -> Optional[str]:
+        """Open a visible browser at the login page, let the person log in (OTP, SSO...), then save the session.
+        Returns the path the person landed on (a page behind the login), or None if it still shows a login form."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=headless)
             context = await browser.new_context(ignore_https_errors=True)
@@ -616,23 +645,29 @@ class BrowserEngine:
             out.parent.mkdir(parents=True, exist_ok=True)
             await context.storage_state(path=str(out))
             out.chmod(0o600)
+            landed = None if await self._on_login_form(page) else (urlparse(page.url).path or "/")
             await browser.close()
+            return landed
 
     async def crawl(self, base_url: str, start_routes: List[str], max_pages: int, excluded=lambda route: False,
                     capture_screenshot: bool = False, viewport: Optional[Dict[str, int]] = None,
                     mask_selectors: Optional[List[str]] = None) -> List[PageVisitResult]:
-        """Visit every page reachable by same-site links (as the logged-in account, if any), up to max_pages. GET only."""
-        # Limit: one browser launch per page; reuse a single browser if crawls get slow
+        """Visit every page reachable by same-site links (as the logged-in account, if any), up to max_pages. GET only.
+        CRAWL_CONCURRENCY pages load at once: pages behind a login spend seconds waiting for their data."""
         queue, visits, seen = list(dict.fromkeys(start_routes or ["/"])), [], set()
         while queue and len(visits) < max_pages:
-            route = queue.pop(0)
-            if route in seen or excluded(route) or UNSAFE_LINK.search(route) or NON_PAGE.search(route):
-                continue
-            seen.add(route)
-            visit = await self.visit_page(base_url, route, viewport=viewport, capture_screenshot=capture_screenshot,
-                                          discover_elements=False, mask_selectors=mask_selectors)
-            visits.append(visit)
-            queue += [link for link in visit.discovered_links if link not in seen]
+            batch = []
+            while queue and len(visits) + len(batch) < max_pages and len(batch) < CRAWL_CONCURRENCY:
+                route = queue.pop(0)
+                if route in seen or excluded(route) or UNSAFE_LINK.search(route) or NON_PAGE.search(route):
+                    continue
+                seen.add(route)
+                batch.append(route)
+            for visit in await asyncio.gather(*(
+                    self.visit_page(base_url, route, viewport=viewport, capture_screenshot=capture_screenshot,
+                                    discover_elements=False, mask_selectors=mask_selectors) for route in batch)):
+                visits.append(visit)
+                queue += [link for link in visit.discovered_links if link not in seen]
         return visits
 
     def _locator(self, page, c: Dict[str, Any]):

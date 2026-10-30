@@ -6,12 +6,25 @@ evaluates findings against task context, and classifies outcomes into standard c
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
 
 from proofpush.task_resolver import TaskContext
 from proofpush.browser_engine import InteractionResult, PageVisitResult, WorkflowExecutionResult
 from proofpush.visual_comparator import VisualComparisonResult
+
+# Browser errors that come from the network or the remote server, not from the page's code: on another host
+# (an avatar on a Google CDN, a font, an analytics script) they come and go between runs. A misspelled
+# domain (ERR_NAME_NOT_RESOLVED) or anything on the app's own host still counts.
+TRANSIENT_NET_ERROR = re.compile(r"ERR_(BLOCKED_BY_ORB|TIMED_OUT|CONNECTION_(RESET|CLOSED|TIMED_OUT)|NETWORK_CHANGED|INTERNET_DISCONNECTED)")
+
+
+def is_third_party_flake(failure, page_url: str) -> bool:
+    host = lambda u: (urlparse(u).hostname or "").lower()
+    return (failure.status is None and host(failure.url) != host(page_url)
+            and bool(TRANSIENT_NET_ERROR.search(failure.error_text or "")))
 
 
 @dataclass
@@ -137,6 +150,7 @@ class RegressionClassifier:
         new_network_failures = [
             f for f in prop_result.network_failures
             if not any(bf.url == f.url for bf in base_result.network_failures)
+            and not is_third_party_flake(f, prop_result.url)
         ]
         if new_network_failures:
             return Finding(
