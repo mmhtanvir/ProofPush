@@ -60,3 +60,27 @@ class TestResponsive(GitRepoTestCase):
         self.assertEqual(finding.category, "REGRESSION")
         self.assertTrue(finding.is_critical)
         self.assertIsNone(classifier.classify_layout("/ (mobile)", good, self.layout(GOOD)))
+
+
+class TestStillLoading(GitRepoTestCase):
+    def test_scenario_62_tailwind_skeletons_count_as_loading(self):
+        """Scenario 62: empty .animate-pulse placeholder cards mean data is still coming (screenshots wait);
+        a small pulsing status dot or a pulsing label does not."""
+        from playwright.async_api import async_playwright
+        from proofpush.browser_engine import _STILL_LOADING_JS
+
+        async def loading(html):
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                page = await browser.new_page()
+                await page.set_content(html)
+                result = await page.evaluate(_STILL_LOADING_JS)
+                await browser.close()
+                return result
+
+        card = '<div class="animate-pulse" style="height:180px;width:300px;background:#e2e8f0"></div>'
+        dot = '<span class="animate-pulse" style="display:inline-block;height:8px;width:8px"></span> Live'
+        label = '<p class="animate-pulse" style="height:20px">Updated just now</p>'
+        self.assertTrue(asyncio.run(loading(card)))
+        self.assertFalse(asyncio.run(loading(dot)))
+        self.assertFalse(asyncio.run(loading(label)))

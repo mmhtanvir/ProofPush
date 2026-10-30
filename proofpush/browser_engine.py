@@ -280,12 +280,14 @@ _LOAD_METRICS_JS = r"""(() => {
 
 # Responsive layout health at the current viewport: sideways scroll, off-screen / overlapping / tiny controls,
 # clipped text, which controls are visible, and load metrics
-# True while the page still shows it is loading: a visible spinner/skeleton/progressbar, aria-busy,
-# or "Loading..." text. Data pages behind a login fetch after the HTML arrives.
+# True while the page still shows it is loading: a visible spinner/skeleton/progressbar, aria-busy, a
+# Tailwind skeleton block or "Loading..." text. Data pages behind a login fetch after the HTML arrives.
 _STILL_LOADING_JS = r"""() => {
   const shown = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const busy = '[aria-busy="true"], [role="progressbar"], .animate-spin, .spinner, .loading, .skeleton';
   if ([...document.querySelectorAll(busy)].some(shown)) return true;
+  // Tailwind skeleton blocks (empty .animate-pulse placeholders), not small pulsing status dots
+  if ([...document.querySelectorAll('.animate-pulse')].some((el) => shown(el) && el.offsetHeight >= 12 && !el.innerText.trim())) return true;
   return /\bloading\b[^\n]{0,20}(\.\.\.|…)/i.test(document.body ? document.body.innerText.slice(0, 5000) : '');
 }"""
 CRAWL_CONCURRENCY = 4  # pages loaded at once while crawling
