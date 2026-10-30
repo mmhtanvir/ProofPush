@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import shutil
+import socket
+import subprocess
+import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +34,27 @@ from proofpush.config import AuthConfig, Credentials, WorkflowConfig, WorkflowSt
 from proofpush.utils import redact_secrets, totp
 
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+# Chromium-based browsers a person logs in with (any of them talks CDP), most common first
+_PF = [os.environ.get(v, "") for v in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")]
+BROWSER_CANDIDATES = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    *(f"{base}\\{rel}" for base in _PF if base for rel in (
+        "Google\\Chrome\\Application\\chrome.exe", "Microsoft\\Edge\\Application\\msedge.exe",
+        "BraveSoftware\\Brave-Browser\\Application\\brave.exe")),
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "brave-browser",
+]
+
+
+def installed_browser() -> Optional[str]:
+    """The person's own Chromium-based browser (PROOFPUSH_BROWSER overrides), or None."""
+    for candidate in [os.environ.get("PROOFPUSH_BROWSER", ""), *BROWSER_CANDIDATES]:
+        found = candidate and (candidate if Path(candidate).is_file() else shutil.which(candidate))
+        if found:
+            return found
+    return None
 
 # (name, selector, official always-pass test keys) for CAPTCHAs that block automated logins
 CAPTCHAS = [
@@ -636,6 +662,9 @@ class BrowserEngine:
     async def save_session_interactively(self, url: str, out: Path, wait_for_user, headless: bool = False) -> Optional[str]:
         """Open a visible browser at the login page, let the person log in (OTP, SSO...), then save the session.
         Returns the path the person landed on (a page behind the login), or None if it still shows a login form."""
+        browser_path = None if headless else installed_browser()
+        if browser_path:
+            return await self._save_session_from_chrome(browser_path, url, out, wait_for_user)
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=headless)
             context = await browser.new_context(ignore_https_errors=True)
@@ -648,6 +677,35 @@ class BrowserEngine:
             landed = None if await self._on_login_form(page) else (urlparse(page.url).path or "/")
             await browser.close()
             return landed
+
+    async def _save_session_from_chrome(self, browser_path: str, url: str, out: Path, wait_for_user) -> Optional[str]:
+        """Bot checks (Turnstile, reCAPTCHA) refuse a Playwright-launched browser (navigator.webdriver), so the person
+        logs in to their own Chrome/Edge/Brave with a throwaway profile; ProofPush attaches over CDP only afterwards to save it."""
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory() as profile:
+            chrome = subprocess.Popen([browser_path, f"--remote-debugging-port={port}", f"--user-data-dir={profile}",
+                                       "--no-first-run", "--no-default-browser-check", url],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, wait_for_user)
+                async with async_playwright() as p:
+                    browser = await p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+                    context = browser.contexts[0]
+                    page = next((pg for pg in context.pages if pg.url.startswith("http")), context.pages[0])
+                    state = await context.storage_state()
+                    # storage_state over CDP leaves out localStorage, where many SPAs keep their token
+                    state["origins"] = [{"origin": await page.evaluate("location.origin"), "localStorage": await page.evaluate(
+                        "Object.entries(localStorage).map(([name, value]) => ({name, value}))")}]
+                    landed = None if await self._on_login_form(page) else (urlparse(page.url).path or "/")
+            finally:
+                chrome.terminate()
+                chrome.wait(timeout=10)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(state))
+        out.chmod(0o600)
+        return landed
 
     async def crawl(self, base_url: str, start_routes: List[str], max_pages: int, excluded=lambda route: False,
                     capture_screenshot: bool = False, viewport: Optional[Dict[str, int]] = None,

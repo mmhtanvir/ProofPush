@@ -21,7 +21,7 @@ try:
     from tests.test_helpers import GitRepoTestCase
 except ImportError:
     from test_helpers import GitRepoTestCase
-from proofpush.browser_engine import NON_PAGE, UNSAFE_LINK
+from proofpush.browser_engine import NON_PAGE, UNSAFE_LINK, installed_browser
 from proofpush.config import load_config, resolve_account
 from proofpush.utils import totp
 
@@ -202,3 +202,11 @@ class TestAuth(GitRepoTestCase):
         self.assertIsNone(asyncio.run(engine.save_session_interactively(form.as_uri(), out, lambda: None, headless=True)))
         self.assertEqual(asyncio.run(engine.save_session_interactively(inside.as_uri(), out, lambda: None, headless=True)),
                          inside.as_posix() if os.name != "nt" else inside.as_uri().split("file://")[1])
+
+    def test_scenario_88_login_uses_the_persons_own_browser(self):
+        own = self.test_dir / "my-browser"
+        own.write_text("")
+        with mock.patch.dict(os.environ, {"PROOFPUSH_BROWSER": str(own)}):
+            self.assertEqual(installed_browser(), str(own))
+        with mock.patch("proofpush.browser_engine.BROWSER_CANDIDATES", []), mock.patch.dict(os.environ, {"PROOFPUSH_BROWSER": ""}):
+            self.assertIsNone(installed_browser())

@@ -9,6 +9,8 @@ import os
 import signal
 import sys
 import asyncio
+import urllib.error
+import urllib.request
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -716,6 +718,15 @@ def login(env_name: str, url: Optional[str]):
         sys.exit(2)
     out = session_file(repo_path, env_name)
     login_path = login_path_for(repo_path, cfg) or "/login"
+    try:
+        urllib.request.urlopen(base, timeout=10)
+    except urllib.error.HTTPError:
+        pass  # the site answered, just not with 200
+    except OSError:
+        hint = (f"Start it first, or drop --url and ProofPush starts it itself: {login_command(env_name)}"
+                if url and env_name == "local" else "Check the address and that the site is up.")
+        console.print(f"[red]Nothing is answering at {base}. {hint}[/red]")
+        sys.exit(1)
     console.print(f"A browser window is opening at {base.rstrip('/')}{login_path}. Log in (including any one-time code), "
                   "wait until you're past the login page, then come back here.", markup=False)
     try:
