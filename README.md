@@ -450,9 +450,11 @@ Every checked page is compared between the old and new version at **each screen 
 | Tiny tap targets | 3+ new controls under 24 px (WCAG 2.5.8) |
 | Missing at one size | `no longer shown: Menu` (e.g. the mobile hamburger) |
 | Slower loading | `loads slower: 400 ms -> 1900 ms`, `shows its main content slower` (largest contentful paint) |
+| Broken images/files | `no longer shows: image Logo, video intro.mp4` (an image or video that failed to load) |
+| Data not loading | `data never finishes loading` (spinner/skeleton still up), `now shows a load error: Failed to load patients` |
 | Janky loading | `freezes while loading: main thread blocked 0 ms -> 650 ms`, `layout jumps while loading` |
 
-Sideways scrolling and off-screen controls count as regressions; the rest need review. With `interactions.auto_click`, buttons are also clicked at every screen size, so a mobile-only menu button that stops working is caught.
+Sideways scrolling, off-screen controls, broken images/videos and data that never loads count as regressions; the rest need review. With `interactions.auto_click`, buttons are also clicked at every screen size, so a mobile-only menu button that stops working is caught.
 
 ---
 

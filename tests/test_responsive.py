@@ -3,6 +3,8 @@ Responsive Layout and Load Speed Tests.
 Covers:
 - Scenario 59: On mobile, a release that adds sideways scrolling, pushes a control off-screen, hides the
   menu button, overlaps controls or freezes while loading is reported; an unchanged page is not
+- Scenario 63: a release where an image or video no longer loads, data never finishes loading, or the page
+  shows "Failed to load" is reported; lazy images further down and signed-URL query changes are not
 """
 
 import asyncio
@@ -60,6 +62,27 @@ class TestResponsive(GitRepoTestCase):
         self.assertEqual(finding.category, "REGRESSION")
         self.assertTrue(finding.is_critical)
         self.assertIsNone(classifier.classify_layout("/ (mobile)", good, self.layout(GOOD)))
+
+    def test_scenario_63_broken_media_and_data_not_loading(self):
+        tiny = "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+        (self.test_dir / "logo.gif").write_bytes(__import__("base64").b64decode(tiny.split(",")[1]))
+        lazy = '<div style="height:5000px"></div><img loading=lazy src="nowhere-lazy.png">'
+        good = f'<!doctype html><body><img alt=Logo src="logo.gif?sig=1"><p>Patients: 3</p>{lazy}</body>'
+        bad = f'''<!doctype html><body><img alt=Logo src="missing-logo.gif?sig=2"><video src="missing.mp4"></video>
+<div role=progressbar style="width:40px;height:40px">.</div><p>Failed to load patients</p>{lazy}</body>'''
+        good_l, bad_l = self.layout(good), self.layout(bad)
+        self.assertEqual(good_l["broken_media"], [])  # lazy image below the fold isn't reached, so not broken
+        self.assertFalse(good_l["still_loading"])
+        finding = RegressionClassifier(TaskContext()).classify_layout("/patients", good_l, bad_l)
+        text = finding.after_behavior
+        self.assertIn("no longer shows: image Logo", text)
+        self.assertIn("video", text)
+        self.assertIn("data never finishes loading", text)
+        self.assertIn("Failed to load patients", text)
+        self.assertEqual(finding.category, "REGRESSION")
+        # same page again with a different signed-URL query: nothing to report
+        self.assertIsNone(RegressionClassifier(TaskContext()).classify_layout(
+            "/patients", good_l, self.layout(good.replace("sig=1", "sig=9"))))
 
 
 class TestStillLoading(GitRepoTestCase):

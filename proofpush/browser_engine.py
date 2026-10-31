@@ -279,7 +279,7 @@ _LOAD_METRICS_JS = r"""(() => {
 })();"""
 
 # Responsive layout health at the current viewport: sideways scroll, off-screen / overlapping / tiny controls,
-# clipped text, which controls are visible, and load metrics
+# clipped text, which controls are visible, broken images/videos, data that never loaded, and load metrics
 # True while the page still shows it is loading: a visible spinner/skeleton/progressbar, aria-busy, a
 # Tailwind skeleton block or "Loading..." text. Data pages behind a login fetch after the HTML arrives.
 _STILL_LOADING_JS = r"""() => {
@@ -317,15 +317,27 @@ _LAYOUT_JS = r"""() => {
     const s = getComputedStyle(el);
     return (s.overflow === 'hidden' || s.overflowX === 'hidden') && s.textOverflow !== 'ellipsis' && el.scrollWidth > el.clientWidth + 2;
   }).map(label).slice(0, 20);
+  // Images/videos that failed to load (lazy images not reached yet aren't 'complete', so they don't count);
+  // named by alt text or file path without the query, so signed URLs match across versions
+  const name = (el, src) => { try { const u = new URL(src, location.href); return (el.getAttribute('alt') || '').trim().slice(0, 40) || u.pathname.split('/').filter(Boolean).slice(-2).join('/') || u.host; } catch (e) { return src.slice(0, 60); } };
+  const broken_media = [
+    ...[...document.images].filter(i => (i.currentSrc || i.src) && !(i.currentSrc || i.src).startsWith('data:') && i.complete && i.naturalWidth === 0)
+      .map(i => 'image ' + name(i, i.currentSrc || i.src)),
+    ...[...document.querySelectorAll('video, audio')].filter(m => m.error || (m.networkState === 3 && (m.currentSrc || m.src)))
+      .map(m => m.tagName.toLowerCase() + ' ' + name(m, m.currentSrc || m.src || '')),
+  ].slice(0, 20);
+  const text = document.body ? document.body.innerText.slice(0, 20000) : '';
+  const load_errors = [...new Set((text.match(/[^\n]{0,40}\b(failed to (load|fetch)|could ?n[o']t (load|fetch)|unable to load|error (loading|fetching)|something went wrong)[^\n]{0,40}/gi) || []).map(t => t.trim()))].slice(0, 10);
   const nav = performance.getEntriesByType('navigation')[0], load = window.__ppLoad || {};
   return {
+    broken_media, load_errors, still_loading: (${STILL})(),
     overflow_px: Math.max(0, docW - vw), offscreen, small, overlaps, clipped,
     controls: [...new Set(rects.map(([el]) => label(el)))].slice(0, 200),
     load_ms: nav ? Math.round(nav.loadEventEnd || nav.domContentLoadedEventEnd || 0) : null,
     lcp_ms: load.lcp == null ? null : Math.round(load.lcp), load_blocking_ms: Math.round(load.blocking || 0),
     load_shift: Math.round((load.cls || 0) * 1000) / 1000,
   };
-}"""
+}""".replace("${STILL}", _STILL_LOADING_JS)
 
 
 class BrowserEngine:

@@ -271,6 +271,12 @@ class RegressionClassifier:
             warn.append("controls now overlap: " + ", ".join(new_items("overlaps")[:3]))
         if new_items("clipped"):
             warn.append("text now cut off in: " + ", ".join(new_items("clipped")[:3]))
+        if new_items("broken_media"):
+            broken.append("no longer shows: " + ", ".join(new_items("broken_media")[:5]))
+        if prop.get("still_loading") and not base.get("still_loading"):
+            broken.append("data never finishes loading (still shows a loading indicator)")
+        if new_items("load_errors"):
+            broken.append("now shows a load error: " + "; ".join(new_items("load_errors")[:3]))
         if len(new_items("small")) >= 3:
             warn.append(f"{len(new_items('small'))} more tap targets under 24 px: " + ", ".join(new_items("small")[:3]))
         gone = [c for c in base.get("controls", []) if c not in set(prop.get("controls", []))]
