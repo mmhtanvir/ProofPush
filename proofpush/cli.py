@@ -22,7 +22,8 @@ from rich.table import Table
 
 from proofpush import __version__
 from proofpush.config import (load_config, resolve_account, resolve_headers, session_file, AuditorConfig,
-                              effective_auth, landing_file, login_command, login_hint, login_path_for, probe_route)
+                              effective_auth, landing_file, login_command, login_hint, login_path_for, probe_route,
+                              session_expired_at)
 from proofpush.git_interceptor import GitInterceptor, PushRefUpdate
 from proofpush.task_resolver import TaskResolver
 from proofpush.baseline_manager import BaselineManager, BaselineMetadata
@@ -209,11 +210,33 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
     to_audit = [u for u in updates if not u.is_delete and not u.remote_ref.startswith("refs/tags/")]
     if not to_audit:
         sys.exit(0)
+    if not history_only:
+        _require_live_session(repo_path, cfg)
     codes = [
         _audit_update(repo_path, cfg, interceptor, u, hook, explicit_task, explicit_base, history_only)
         for u in to_audit
     ]
     sys.exit(max(codes))
+
+
+def _require_live_session(repo_path: Path, cfg: AuditorConfig, env_name: str = "local") -> None:
+    """Stop the push when the sign-in saved by `proofpush login` has expired: every signed-in check would fail
+    and read as a regression. Advisory mode only warns. A test account that can log in by itself never blocks."""
+    expired = session_expired_at(repo_path, env_name)
+    if expired is None:
+        return
+    auth = effective_auth(repo_path, cfg, env_name)
+    if auth and resolve_account(repo_path, auth, env_name)[0]:
+        return
+    when = datetime.fromtimestamp(expired).strftime("%Y-%m-%d %H:%M")
+    msg = (f"[proofpush] Your ProofPush sign-in expired at {when}, so pages behind the login can't be checked.\n"
+           f"  Sign in again: {login_command(env_name)}\n  Then push again.")
+    if cfg.mode == "advisory":
+        console.print(msg + "\n  (advisory mode: continuing without blocking)", markup=False)
+        return
+    console.print(msg, markup=False)
+    console.print("[proofpush] Push blocked until you sign in again.", markup=False)
+    sys.exit(1)
 
 
 def _api_headers_for(cfg: AuditorConfig, repo_path: Path, env_name: str, cookies: Optional[list] = None) -> Dict[str, str]:

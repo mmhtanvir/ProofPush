@@ -190,6 +190,47 @@ class TestAuth(GitRepoTestCase):
         saved.unlink()
         self.assertIsNone(login_hint(self.local_dir, load_config(self.local_dir)))
 
+    def test_scenario_88_expired_saved_session_blocks_push(self):
+        """Scenario 88: a saved sign-in whose tokens expired stops the push with the `proofpush login` command,
+        instead of every signed-in check failing as a regression. Advisory only warns."""
+        import json
+        from proofpush.cli import _require_live_session
+        from proofpush.config import session_expired_at, session_file
+
+        def jwt(exp):
+            body = base64.urlsafe_b64encode(json.dumps({"sub": "1", "exp": exp}).encode()).decode().rstrip("=")
+            return f"eyJhbGciOiJIUzI1NiJ9.{body}.sig"
+
+        def save(access_exp, cookies=()):
+            auth = json.dumps({"state": {"accessToken": jwt(access_exp), "refreshToken": "opaque"}})
+            saved.write_text(json.dumps({"cookies": list(cookies), "origins": [
+                {"origin": "http://localhost:3000", "localStorage": [{"name": "app-auth", "value": auth}]}]}))
+
+        saved = session_file(self.local_dir, "local")
+        saved.parent.mkdir(exist_ok=True)
+        self.assertIsNone(session_expired_at(self.local_dir, "local"))  # no session saved
+
+        save(1000)
+        self.assertEqual(session_expired_at(self.local_dir, "local", now=2000), 1000)
+        self.assertIsNone(session_expired_at(self.local_dir, "local", now=500))
+        save(1000, [{"name": "sid", "value": jwt(3000), "expires": -1}])  # a newer token still valid
+        self.assertIsNone(session_expired_at(self.local_dir, "local", now=2000))
+        saved.write_text(json.dumps({"cookies": [{"name": "sid", "value": "x", "expires": 1000}], "origins": []}))
+        self.assertEqual(session_expired_at(self.local_dir, "local", now=2000), 1000)
+        saved.write_text(json.dumps({"cookies": [{"name": "sid", "value": "x", "expires": -1}], "origins": []}))
+        self.assertIsNone(session_expired_at(self.local_dir, "local", now=2000))  # browser-session cookie: can't tell
+
+        save(1000)
+        cfg = load_config(self.local_dir)
+        with self.assertRaises(SystemExit) as stop:
+            _require_live_session(self.local_dir, cfg)
+        self.assertEqual(stop.exception.code, 1)
+        cfg.mode = "advisory"
+        _require_live_session(self.local_dir, cfg)  # warns, doesn't exit
+        save(4102444800)  # 2100: still valid
+        cfg.mode = "interactive"
+        _require_live_session(self.local_dir, cfg)
+
     def test_scenario_87_interactive_login_reports_where_it_landed(self):
         """Scenario 87: `proofpush login` knows whether the person really got past the login form."""
         import asyncio

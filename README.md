@@ -178,7 +178,7 @@ For prod, run `proofpush check --env prod` after each deploy (CI step) or on a s
 
 ## 🔐 Test Accounts: Check the Whole Site, Locally and in Prod
 
-**Quickest: sign in once.** When ProofPush finds a login page (`/login`, `/signin`, ...) and you haven't signed in, `proofpush install`, `proofpush doctor` and every push print the command to run: `proofpush login --env local`. It starts your app (from `application.start_command`), opens a browser on the login page and saves the session after you sign in. It also remembers the page you landed on, so an expired session is noticed, and it tells you if you pressed Enter before getting past the login. No `auth:` section is needed; add one only to change `login_path` or to give a test account ProofPush can sign in with by itself:
+**Quickest: sign in once.** When ProofPush finds a login page (`/login`, `/signin`, ...) and you haven't signed in, `proofpush install`, `proofpush doctor` and every push print the command to run: `proofpush login --env local`. It starts your app (from `application.start_command`), opens a browser on the login page and saves the session after you sign in. It also remembers the page you landed on, so an expired session is noticed (and once the saved sign-in's tokens expire, the next push stops right away and asks you to run `proofpush login` again; advisory mode only warns), and it tells you if you pressed Enter before getting past the login. No `auth:` section is needed; add one only to change `login_path` or to give a test account ProofPush can sign in with by itself:
 
 Give ProofPush a test account per environment and it logs in, crawls every page reachable by links, and checks each one, including pages behind the login.
 

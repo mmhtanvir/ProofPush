@@ -299,6 +299,55 @@ def probe_route(repo_path: Path, cfg: "AuditorConfig", env_name: str) -> str:
     return landed or (cfg.routes.base_routes or ["/"])[0]
 
 
+def _jwt_exps(value: Any) -> List[float]:
+    """`exp` of every JWT inside a stored value (plain token, or nested in JSON like {"state": {"accessToken": ...}})."""
+    import base64
+    import json
+    if isinstance(value, dict):
+        return [e for v in value.values() for e in _jwt_exps(v)]
+    if isinstance(value, list):
+        return [e for v in value for e in _jwt_exps(v)]
+    if not isinstance(value, str):
+        return []
+    if value[:1] in "{[":
+        try:
+            return _jwt_exps(json.loads(value))
+        except ValueError:
+            return []
+    parts = value.removeprefix("Bearer ").split(".")
+    if len(parts) != 3 or not parts[0].startswith("ey"):
+        return []
+    try:
+        exp = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))).get("exp")
+    except (ValueError, AttributeError):
+        return []
+    return [float(exp)] if isinstance(exp, (int, float)) else []
+
+
+def session_expired_at(repo_path: Path, env_name: str, now: Optional[float] = None) -> Optional[float]:
+    """When the session saved by `proofpush login` stopped working, or None if it still looks valid (or can't tell).
+
+    Read offline from the saved tokens: expired once every JWT in it has expired (an app that renders a cached
+    dashboard never shows the login form, so probing the page alone misses it). Without JWTs, once every persistent
+    cookie has expired."""
+    import json
+    import time
+    path = session_file(repo_path, env_name)
+    try:
+        state = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    now = time.time() if now is None else now
+    cookies = state.get("cookies") or []
+    exps = [e for c in cookies for e in _jwt_exps(c.get("value"))]
+    exps += [e for o in state.get("origins") or [] for kv in o.get("localStorage") or [] for e in _jwt_exps(kv.get("value"))]
+    if not exps:
+        exps = [float(c["expires"]) for c in cookies if isinstance(c.get("expires"), (int, float)) and c["expires"] > 0]
+    if exps and max(exps) <= now:
+        return max(exps)
+    return None
+
+
 def login_hint(repo_path: Path, cfg: "AuditorConfig", env_name: str = "local") -> Optional[str]:
     """What to run so pages behind the login get checked, or None (nothing to do / no login page)."""
     if session_file(repo_path, env_name).is_file():
