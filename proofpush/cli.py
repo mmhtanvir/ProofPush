@@ -43,6 +43,18 @@ from proofpush.utils import detect_unattended, exclude_from_git, redact_secrets,
 
 
 console = Console(soft_wrap=True)
+_started = datetime.now()
+
+
+def step(msg: str) -> None:
+    """Live progress line, so people (and AI CLIs) see what the audit is doing while it runs."""
+    secs = int((datetime.now() - _started).total_seconds())
+    console.print(f"[proofpush {secs // 60}:{secs % 60:02d}] {msg}", markup=False, highlight=False)
+
+
+def _watching() -> bool:
+    """`--watch` / PROOFPUSH_WATCH=1 git push: show the browser windows instead of running them headless."""
+    return os.environ.get("PROOFPUSH_WATCH", "").lower() in ("1", "true", "yes")
 
 
 @click.group()
@@ -166,8 +178,12 @@ def doctor():
 @click.option("--base", "explicit_base", default=None, help="Explicit baseline Git revision")
 @click.option("--mode", type=click.Choice(["advisory", "interactive", "strict"]), help="Override audit policy mode")
 @click.option("--history-only", is_flag=True, help="Only run git-based checks (past fixes, secrets); skip app and browser")
-def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: Optional[str], mode: Optional[str], history_only: bool):
+@click.option("--watch", is_flag=True, help="Show the browser while it checks pages (same as PROOFPUSH_WATCH=1 git push)")
+def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: Optional[str], mode: Optional[str],
+           history_only: bool, watch: bool):
     """Audit pending or proposed Git push changes."""
+    if watch:
+        os.environ["PROOFPUSH_WATCH"] = "1"
     # AI CLIs kill long-running commands on timeout; exit via SystemExit so `finally` blocks
     # still remove worktrees and stop the app servers instead of leaking them
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
@@ -335,8 +351,9 @@ def _compare_test_suites(cfg: AuditorConfig, base_dir: Path, prop_dir: Path,
                                        "Point tests at a local/disposable database, or set tests.allow_remote_database if that is safe.")]
     if not command:
         return [_blocked("Test suite", "tests.enabled is on but no test command was found; set tests.command")]
-    console.print(f"Running the project's tests on both versions: {command}", markup=False)
+    step(f"Running the project's tests on the baseline: {command}")
     before = test_suite.run_suite(base_dir, command, cfg.tests.timeout, base_db)
+    step(f"Running the project's tests on your changes: {command}")
     after = test_suite.run_suite(prop_dir, command, cfg.tests.timeout, prop_db)
     return test_suite.compare_suites(before, after)
 
@@ -811,6 +828,7 @@ def _audit_update(
     console.print(f"[bold cyan]Auditing changes:[/bold cyan] {baseline_sha[:10]} (baseline) &rarr; {proposed_sha[:10]} (proposed)")
     console.print(f"[bold cyan]Task:[/bold cyan] {task_context.title}")
 
+    step("Checking the diff: secrets, unrelated edits, undone fixes, suspicious push patterns")
     # 4. Perform Git diff and unrelated change analysis
     unrelated_analyzer = UnrelatedAnalyzer(repo_path, sensitive_globs=cfg.security.sensitive_paths)
     security_res = unrelated_analyzer.analyze_changes(
@@ -839,11 +857,11 @@ def _audit_update(
     if not history_only:
         try:
             # Launch baseline environment
-            console.print("Launching isolated baseline environment...")
+            step(f"Starting the app at the baseline ({baseline_sha[:10]})...")
             base_env = env_mgr.launch_environment(baseline_sha, label="baseline")
 
             # Launch proposed environment
-            console.print("Launching isolated proposed environment...")
+            step(f"Starting the app with your changes ({proposed_sha[:10]})...")
             prop_env = env_mgr.launch_environment(proposed_sha, label="proposed")
             findings.extend(_compare_test_suites(cfg, base_env.worktree_path, prop_env.worktree_path,
                                                  base_env.database_url, prop_env.database_url))
@@ -891,7 +909,9 @@ def _audit_update(
                 base_url_b = base_env.frontend.base_url
                 base_url_p = prop_env.frontend.base_url
 
-                browser_engine = BrowserEngine(headless=True)
+                browser_engine = BrowserEngine(headless=not _watching())
+                if _watching():
+                    step("Watch mode: browser windows open for each check (screenshots may differ slightly from headless runs)")
                 browser_engine.extra_headers = resolve_headers(repo_path, cfg.api_headers)
                 vis_comparator = VisualComparator(
                     diff_threshold=cfg.visual.diff_threshold,
@@ -919,6 +939,7 @@ def _audit_update(
                         if not creds and not saved.is_file():
                             findings.append(_blocked("Test account (local)", problem))
                         else:
+                            step("Signing in the test account on both versions...")
                             base_err = await browser_engine.login(base_url_b, auth, creds, saved, probe)
                             prop_err = await browser_engine.login(base_url_p, auth, creds, saved, probe)
                             if prop_err and not base_err:
@@ -942,6 +963,7 @@ def _audit_update(
                     crawled_b: dict = {}
                     crawled_p: dict = {}
                     if crawl:
+                        step(f"Crawling the site for pages to check (up to {cfg.routes.max_pages})...")
                         # The crawl's own visits (first viewport, with screenshots) are reused below, not repeated
                         # Both versions at once: each loads under the same conditions, and it halves the wait
                         prop_visits, base_visits = await asyncio.gather(*(
@@ -971,8 +993,9 @@ def _audit_update(
 
                     clicked_pages = 0
                     # Audit routes
-                    for r in routes:
+                    for i, r in enumerate(routes, 1):
                         routes_checked_count += 1
+                        step(f"Page {i}/{len(routes)}: {r}")
                         base_visit = crawled_b.get(r) or await visit(base_url_b, r, first)
                         prop_visit = crawled_p.get(r) or await visit(base_url_p, r, first)
                         findings.append(classifier.classify_route_visit(
@@ -1010,12 +1033,14 @@ def _audit_update(
                                 findings.append(layout_finding)
                             # Buttons at this screen size (a mobile-only menu button can break on its own)
                             if click_here:
+                                step(f"  clicking buttons on {at(r, vp)}")
                                 findings.extend(await _compare_clicks(browser_engine, classifier, cfg, r,
                                                                       base_url_b, base_url_p, size(vp), at(r, vp)))
 
                     # Audit workflows
                     for wf in cfg.workflows:
                         workflows_checked_count += 1
+                        step(f"Workflow {workflows_checked_count}/{len(cfg.workflows)}: {wf.name}")
                         base_wf_res = await browser_engine.execute_workflow(base_url_b, wf)
                         prop_wf_res = await browser_engine.execute_workflow(base_url_p, wf)
                         wf_finding = classifier.classify_workflow(base_wf_res, prop_wf_res, guard=wf.guard)
@@ -1066,6 +1091,7 @@ def _audit_update(
             # Ensure cleanup runs ALWAYS
             env_mgr.cleanup()
 
+    step("Writing the report...")
     # 8. AI synthesis (deterministic local by default)
     ai_adapter = get_ai_adapter(cfg.ai)
     ai_summary = ai_adapter.synthesize_summary(
