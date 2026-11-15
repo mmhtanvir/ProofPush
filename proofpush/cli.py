@@ -52,6 +52,20 @@ def step(msg: str) -> None:
     console.print(f"[proofpush {secs // 60}:{secs % 60:02d}] {msg}", markup=False, highlight=False)
 
 
+def _clock(secs: float) -> str:
+    secs = int(secs)
+    return f"{secs // 60}:{secs % 60:02d}"
+
+
+def progress_bar(done: int, total: int, started: datetime, width: int = 20) -> str:
+    """[██████░░░░] 3/10 · ~1:05 left -- time left from the average time per finished item so far."""
+    filled = round(width * done / total) if total else width
+    text = f"[{'█' * filled}{'░' * (width - filled)}] {done}/{total}"
+    if 0 < done < total:
+        text += f" · ~{_clock((datetime.now() - started).total_seconds() / done * (total - done))} left"
+    return text
+
+
 def _watching() -> bool:
     """`--watch` / PROOFPUSH_WATCH=1 git push: show the browser windows instead of running them headless."""
     return os.environ.get("PROOFPUSH_WATCH", "").lower() in ("1", "true", "yes")
@@ -228,10 +242,22 @@ def review(hook: bool, full: bool, explicit_task: Optional[str], explicit_base: 
         sys.exit(0)
     if not history_only:
         _require_live_session(repo_path, cfg)
+    # Whole-check estimate before anything runs: starting both app versions takes a while before the page bar shows
+    last_run = repo_path / ".proofpush" / "last_run_seconds"
+    try:
+        step(f"Last full check here took {_clock(float(last_run.read_text()))}; expect about the same")
+    except (OSError, ValueError):
+        pass
     codes = [
         _audit_update(repo_path, cfg, interceptor, u, hook, explicit_task, explicit_base, history_only)
         for u in to_audit
     ]
+    if not history_only:
+        try:
+            last_run.parent.mkdir(exist_ok=True)
+            last_run.write_text(str(int((datetime.now() - _started).total_seconds())))
+        except OSError:
+            pass
     sys.exit(max(codes))
 
 
@@ -992,10 +1018,13 @@ def _audit_update(
                         return result
 
                     clicked_pages = 0
+                    # One bar over every page and workflow; the time left comes from how long the finished ones took
+                    total_items = len(routes) + len(cfg.workflows)
+                    checks_started = datetime.now()
                     # Audit routes
                     for i, r in enumerate(routes, 1):
                         routes_checked_count += 1
-                        step(f"Page {i}/{len(routes)}: {r}")
+                        step(f"{progress_bar(i - 1, total_items, checks_started)}  page {i}/{len(routes)}: {r}")
                         base_visit = crawled_b.get(r) or await visit(base_url_b, r, first)
                         prop_visit = crawled_p.get(r) or await visit(base_url_p, r, first)
                         findings.append(classifier.classify_route_visit(
@@ -1040,11 +1069,15 @@ def _audit_update(
                     # Audit workflows
                     for wf in cfg.workflows:
                         workflows_checked_count += 1
-                        step(f"Workflow {workflows_checked_count}/{len(cfg.workflows)}: {wf.name}")
+                        step(f"{progress_bar(len(routes) + workflows_checked_count - 1, total_items, checks_started)}"
+                             f"  workflow {workflows_checked_count}/{len(cfg.workflows)}: {wf.name}")
                         base_wf_res = await browser_engine.execute_workflow(base_url_b, wf)
                         prop_wf_res = await browser_engine.execute_workflow(base_url_p, wf)
                         wf_finding = classifier.classify_workflow(base_wf_res, prop_wf_res, guard=wf.guard)
                         findings.append(wf_finding)
+                    if total_items:
+                        step(f"{progress_bar(total_items, total_items, checks_started)}  browser checks done "
+                             f"in {_clock((datetime.now() - checks_started).total_seconds())}")
 
                 # Run async browser checks
                 async def run_and_close():
